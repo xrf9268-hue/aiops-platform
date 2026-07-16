@@ -1,0 +1,713 @@
+{
+  "activation_status": "not_activated",
+  "capability_manifest": {
+    "codex_home_inherited": true,
+    "codex_version": "codex-cli 0.144.4",
+    "effective_thread_profile": {
+      "approvalPolicy": "never",
+      "cwd": "/tmp/aiops-workflow-benchmark-20260715-1117/seed-repo",
+      "model": "gpt-5.6-sol",
+      "modelProvider": "openai",
+      "reasoningEffort": "high",
+      "sandbox": {
+        "type": "dangerFullAccess"
+      }
+    },
+    "instructions": [
+      {
+        "path": "$CODEX_HOME/AGENTS.md",
+        "sha256": "0bf7a30a13d7224eaaf5e8ea5d519c7139ce03806f337fb0231629838d730c44"
+      },
+      {
+        "path": "$REPO/AGENTS.md",
+        "sha256": "084d2773352c414d119051308c21a1c78f56c8ca328b3f8ca3c3a42f291459d8"
+      }
+    ],
+    "limitations": [
+      "The prior #1089 arm did not record this surface.",
+      "Connector authorization state and all endpoints, paths, environment values, and credentials are excluded.",
+      "External, nested-agent, and subagent token usage remains unmeasured."
+    ],
+    "mcp_servers": [
+      {
+        "name": "computer-use",
+        "status": "disabled"
+      },
+      {
+        "name": "context7",
+        "status": "enabled"
+      },
+      {
+        "name": "dingtalk-docs",
+        "status": "enabled"
+      },
+      {
+        "name": "github",
+        "status": "enabled"
+      },
+      {
+        "name": "linear",
+        "status": "enabled"
+      },
+      {
+        "name": "node_repl",
+        "status": "enabled"
+      },
+      {
+        "name": "openaiDeveloperDocs",
+        "status": "enabled"
+      },
+      {
+        "name": "sites-design-picker",
+        "status": "enabled"
+      },
+      {
+        "name": "stitch",
+        "status": "enabled"
+      },
+      {
+        "name": "xcodebuildmcp",
+        "status": "enabled"
+      }
+    ],
+    "plugins": [
+      {
+        "manifest_sha256": "a1df71dc771fd7d0c756e9ee6893829030b43253d0de3530ef96e2d0174ca3ed",
+        "name": "browser@openai-bundled",
+        "version": "26.707.72221"
+      },
+      {
+        "manifest_sha256": "86d4a225cb929ab68f00f6258a75daffb02122dd34875dabd349c3474dc35908",
+        "name": "build-ios-apps@openai-curated",
+        "version": "11c74d6b"
+      },
+      {
+        "manifest_sha256": "182c82cfb6b4616accad2bfc8ae26ac3f40cced7ffe967473d4e503f202273fb",
+        "name": "chrome@openai-bundled",
+        "version": "26.707.72221"
+      },
+      {
+        "manifest_sha256": "ec93f4f0976573314c8b5734589f34013d60ed12c2b5197cd9d690580e02dd05",
+        "name": "computer-use@openai-bundled",
+        "version": "1.0.1000387"
+      },
+      {
+        "manifest_sha256": "efa1ab3c3233744546a8739b841f6e65bfbada7ca24b0f05e68d1c2227b87365",
+        "name": "documents@openai-primary-runtime",
+        "version": "26.709.11516"
+      },
+      {
+        "manifest_sha256": "d409e7f8720f50708bd0b6ddaf25e3d2d77d7d0069472051246579728ea579db",
+        "name": "github@openai-curated",
+        "version": "11c74d6b"
+      },
+      {
+        "manifest_sha256": "800bd4d3d8afdb43b89a4211cfb24e83d3d820d750ec21a0d80124658023cfb6",
+        "name": "google-drive@openai-curated",
+        "version": "11c74d6b"
+      },
+      {
+        "manifest_sha256": "dc83447f9558c9d090063b300030b69fcdda8ca93e8ce0c7bde1a84475c9d9a0",
+        "name": "linear@openai-curated",
+        "version": "11c74d6b"
+      },
+      {
+        "manifest_sha256": "f5b33380cd595adc7eeee452cbc28137b77c3711945255d0a2a5df1a46f387fa",
+        "name": "pdf@openai-primary-runtime",
+        "version": "26.709.11516"
+      },
+      {
+        "manifest_sha256": "271d4fb1b3beb99dfc070770e70df04c09a702213d5c358ddbe8203ce22658c1",
+        "name": "presentations@openai-primary-runtime",
+        "version": "26.709.11516"
+      },
+      {
+        "manifest_sha256": "94cd7467c6b3ddbb5051ec94e95e4d66e1748f4fc7c52d321fabfc35df259b9e",
+        "name": "sentry@openai-curated",
+        "version": "11c74d6b"
+      },
+      {
+        "manifest_sha256": "2c2805bc8db9c41c37b82a1a5460f4520652786535e91f7ecad87f598fed24d7",
+        "name": "sites@openai-bundled",
+        "version": "0.1.27"
+      },
+      {
+        "manifest_sha256": "f8141626b51b6601ef80e2526a8d98b9829cc50e492a4635ea8a271205f9146f",
+        "name": "spreadsheets@openai-primary-runtime",
+        "version": "26.709.11516"
+      },
+      {
+        "manifest_sha256": "576e1a5ccb3e1fdb728d2574eb2182188eacda758894c0eda5729933326a4ff1",
+        "name": "template-creator@openai-primary-runtime",
+        "version": "26.709.11516"
+      },
+      {
+        "manifest_sha256": "1e5f8bf7d5c33ecc7807801a5bcd06e621745a77c0628db6dde29b3315bf77b6",
+        "name": "visualize@openai-bundled",
+        "version": "1.0.11"
+      }
+    ],
+    "skills": [
+      {
+        "name": ".system/imagegen",
+        "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": ".system/openai-docs",
+        "sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": ".system/plugin-creator",
+        "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": ".system/skill-creator",
+        "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": ".system/skill-installer",
+        "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "ask-matt",
+        "sha256": "4465bad6bb9f7426743c1013d88740594da34e0f9934d375d93bbf981d5317b5",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "chrome-use-acceptance",
+        "sha256": "a34e1c2f39d7087fdf9214993ccc9a7cb0aa9a6fe6b5c395d1c450f889bbd3d8",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "code-review",
+        "sha256": "6a65cc61114f96db07ec41e3920e67c9c5bf70dd6e0901eb9460ebcb2bdc209f",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "codebase-design",
+        "sha256": "a8d50abac5a4018f60e1d911d4b6f4e36454ca14d6c390c0695a578c7de65dad",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "diagnosing-bugs",
+        "sha256": "7a0779480f323a66d109404646bcc1a14bf0232b45b3e3ea93b652a035718acb",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "domain-modeling",
+        "sha256": "152e2c97239affb12a60c5f4a7e74ab546a49ae169688c81f4e2ccc42dafa579",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "github-project-analyzer.backup-20260402140915",
+        "sha256": "2c9a7d6a39ec5debd8ea7031161efeac710eb64ec552896b5df8ee7f472d7f3d",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "github-project-analyzer.backup-20260402161840",
+        "sha256": "58266c8a32c0fd6c14f91081374929f3d16cc86c960c9f7c076c81e163d866b5",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "grill-me",
+        "sha256": "6189dfceb7304a6e5558f75d87e68fa3bc7fcf7ba120e44f21f8a61fe01eba54",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "grilling",
+        "sha256": "5a35925d03a391bcfa46940868b649b72dba89ec9c19525e785bbb6bd3a7f478",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "handoff",
+        "sha256": "57c9f1f392d7352cdc85b1e39ca49eddc70ce1dc278bd9653fb4f23dfc2560fc",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "implement",
+        "sha256": "6d3fd9e83b8f36e5213854779db49b256a457a7ebb4a503e53fa7dcff696adc3",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "improve-codebase-architecture",
+        "sha256": "0026900866ed2a542af0559cef11dd7ae707633b75cc6f668c2e7c0a33e35032",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "leeguooooo-chatgpt-imagegen",
+        "sha256": "8ee20a4e1ae9d2406b84aec6accd4c9db16c8297870e46c3aa825e182a570d59",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "prototype",
+        "sha256": "03074862d4b6e4eaf472aa75146e1d193dd9e3bba0e4303a9b2425562d1d44cc",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "research",
+        "sha256": "af378829f015775a3bcd65ff466826722e99359017ae6bae227ca4c9bd14049c",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "setup-matt-pocock-skills",
+        "sha256": "def265a8b15ffb8afc3f335d69e175ba9a7fe3991218984b0e49e8345cde3b20",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "tdd",
+        "sha256": "5363bb2775679fe9311fbb67947f95359169c6e7f1fac77c0f25e190bca6cf2f",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "teach",
+        "sha256": "6d2dbe5e03084cf26fef66b535127b36cd1bcbe9478e26b0626029cd51dc2259",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "to-spec",
+        "sha256": "267638edd513b5918de626ad5605d261952abb7428cb308869c663ca924e93e7",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "to-tickets",
+        "sha256": "1846d215e24ec1219b199a708329ca915db93138d4f3675af29db4d32ee41391",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "triage",
+        "sha256": "d45827c299c021f77b0f146fefa3ee679b13f99e9a2ffdf48e8de2347adeefe1",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "wayfinder",
+        "sha256": "bef437de697fb6984a8a90b7fd82f128609148d6e02f635ce419d03555b351e1",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "writing-great-skills",
+        "sha256": "4d6ccbc3760b1bd4107c495a79872286ea69494003f3b0a719fc95b147457061",
+        "source": "$CODEX_HOME/skills"
+      },
+      {
+        "name": "brainstorming",
+        "sha256": "e14914605f640e0841758e45d0ab2a53243b59b921f929e47921c99668f2e61d",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "dispatching-parallel-agents",
+        "sha256": "f0df13f584049059cc5619f90061405b89dcc6e28ab3f2a8517d27d99c7a46a6",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "executing-plans",
+        "sha256": "b357c2a2e5bf24adf237b5d4a83cacd828f07b886d0873ad91546aa3c99905c9",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "finishing-a-development-branch",
+        "sha256": "e6d4a812de900d33c6eacfb40747f99427f25c304a7b7099120f9373b115a47f",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "receiving-code-review",
+        "sha256": "647036bbdab7bf2317e14e079595e984c9030f64295e2b4c0fb57dbeb48f25dd",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "requesting-code-review",
+        "sha256": "1017ccdd5bc61fab67c654cf118cbdb520464b313073a0a6b9a6b9aa647a3ad6",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "subagent-driven-development",
+        "sha256": "41ab239a6ad1c487cd839fdac972a8c9cf0f5e90efa59a63f963767864f0df4c",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "systematic-debugging",
+        "sha256": "3b20719eca4f0461cb51a195221320d775dcf03b6859271066a03a5132a6ce7a",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "test-driven-development",
+        "sha256": "b5b4717b8b761cce15a6cfe9022e33fd959e0894c0c39d72c9cb49c23486c10e",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "using-git-worktrees",
+        "sha256": "e2c3ec142e52868a51af246c620cd76ab648dcf27d6900d47e6ffd07159a9794",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "using-superpowers",
+        "sha256": "918562bbba1c73d1407c50de77a92eeaa6930508bdb57a64324d7d508a9069e1",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "verification-before-completion",
+        "sha256": "ea52d15aabaf72bc6b558efe2c126f161b53961090ddcd712000273bfe8c7b6c",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "writing-plans",
+        "sha256": "272e1af349f5062c28dc282b3e21b220d58d683a7314a10c455b7432ec91d845",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "writing-skills",
+        "sha256": "f01f666a4426ce800d40649704104c252e6607c196656e5ce6a28e9f51650f3a",
+        "source": "$CODEX_HOME/superpowers/skills"
+      },
+      {
+        "name": "bb-code-review",
+        "sha256": "5d7f3fb6d8e3abd73e18d8880b1e612bc227ec5ec759661fffbe83c19443a877",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "brand-guidelines",
+        "sha256": "1120b3769e2985cefb3d25be981b1f914abeba57ae079b83c20c666c164fa9fe",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "dingtalk-docs-downloader",
+        "sha256": "337b5ca84f1c0a1c67bf820b7cc506a09836a9cd25b27077595e143abd85d846",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "dingtalk-text-diagram-prompts",
+        "sha256": "81370c7489d0452c2f9f40e74376e30c9574955dcda47619d97a1c716fee7d75",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "documentation-lookup",
+        "sha256": "17320b699acff2101ead63c0edd84b668191c0393827a44ed877fa76e8c72dfd",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "frontend-skill",
+        "sha256": "d367b2d22825d74c169475507e7ff109b81c1e9c20b2de3421fb19fcfbe3329b",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "gh-pr-follow-through",
+        "sha256": "d97a342dbcd454ea94bcc35ff309d35bdd619d983d4cc92593bcf30d28a0ec94",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "github-project-analyzer",
+        "sha256": "a35624acdb56847acb0160e8dfa5fb1789798549f15fb26468d0493cadf11118",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "graphify",
+        "sha256": "7593f795660a2b00168eee0a9018676ec0958da962d1a1b301eccf335b0ee55c",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "grill-with-docs",
+        "sha256": "3e35025119ba03efe7983dfdec3c8b96918142e3978512f3c2bf66d428310c7e",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "jira-commit",
+        "sha256": "4103e075d6b2b16790cafb3b6b32fa1ea3122addcb169b99784012b46c358969",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "macos-runtime-validation",
+        "sha256": "9924e343384d321a0cc376ed0430be9db6149255312d6ccc62a7e9bfbd902e18",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "playwright",
+        "sha256": "0ffaabcc8e0990627c4725f18bf1c7955534a796c1c199e872909de2013ce6a8",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "pptx",
+        "sha256": "e5b0df918cbe9d62508b3cf808d73899633f82fc19f6258a25ef9f0de7e62125",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "worktree",
+        "sha256": "5603a48de620e8c649c93100a215ad2b779693281314ec062bb65e97896bc35b",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "x-article-publisher",
+        "sha256": "49e48c71f379e24ea6332c8132bf6e472629928e954688c332b0d01006f141db",
+        "source": "$HOME/.agents/skills"
+      },
+      {
+        "name": "autonomous-milestone-build",
+        "sha256": "1df923d2a385ea2e92684f66cddeb22288f76047c07a1df39c246681037a14e4",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "bb-code-review",
+        "sha256": "af803033cbed623f2a2229ee8be8ac007f31863d3d009c87f69e586b4181deb5",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "gh-pr-follow-through",
+        "sha256": "76fcf78c8f648c2c790666e0de29d0fdb25331b6ca7cf1ced54c15643a5c293a",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "github-project-analyzer",
+        "sha256": "a35624acdb56847acb0160e8dfa5fb1789798549f15fb26468d0493cadf11118",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "lessons-learned-claude",
+        "sha256": "d0d2e03450b28c05095629cc110bbc8bbb46f5c63800032d682ffad5b586369e",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "lessons-learned-codex",
+        "sha256": "4ab51cd8a9faae133ad32f745c20ca373e81a695432949570737d061b058c86e",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "macos-menu-bar-utility-dev",
+        "sha256": "d5f5f9c2c598c212e609cdadb4ed0c0ce6e80b12e72c933572ff130b146f9b35",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "macos-runtime-validation",
+        "sha256": "9924e343384d321a0cc376ed0430be9db6149255312d6ccc62a7e9bfbd902e18",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "pomofox-character-gif-production",
+        "sha256": "b3c0e0a50edffadf5957712be2c6ccd3b4e97f8dfedd6522609883bff2b564b5",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "spec-authoring",
+        "sha256": "51dccade28c23ff0f0ef7865b1703e18b96264f8f243fd59b23c9802f790f547",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "trq212-style-tech-essay",
+        "sha256": "b40b2831ad35edb2b992d233dd13638d7b664f338b3744f9b306420110f2afa7",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "webapp-testing",
+        "sha256": "65441e353a49a5e2277f9b1acd84936bbdba3cd8ae7e56cafd8ffce495554cad",
+        "source": "$HOME/developer/yy-skills"
+      },
+      {
+        "name": "x-content-archiver",
+        "sha256": "676b95534661f64a9c69b4137785898fda4afc7c8819d459321c3ec57ce0ad5f",
+        "source": "$HOME/developer/yy-skills"
+      }
+    ]
+  },
+  "codex": {
+    "cli_version": "codex-cli 0.144.4",
+    "doctor_global_config_observation": {
+      "model": "gpt-5.6-sol",
+      "note": "doctor reports inherited config.toml; direct thread/start through the exact workflow argv proves the high override",
+      "reasoning_effort": "xhigh"
+    },
+    "effective_thread_profile": {
+      "approvalPolicy": "never",
+      "cwd": "/tmp/aiops-workflow-benchmark-20260715-1117/seed-repo",
+      "model": "gpt-5.6-sol",
+      "modelProvider": "openai",
+      "reasoningEffort": "high",
+      "sandbox": {
+        "type": "dangerFullAccess"
+      }
+    },
+    "workflow_command_override": "codex app-server --config shell_environment_policy.inherit=all --config model=gpt-5.6-sol --config model_reasoning_effort=high"
+  },
+  "generated_at": "2026-07-16T02:03:50.265047Z",
+  "issues": [
+    {
+      "canonical": {
+        "body": "# feat: persist and list todos\n\nImplement the first slice of the todo CLI.\n\n## Acceptance criteria\n\n- `TODO_DB=/path todo add \"Buy milk\"` persists a todo and prints `added 1`.\n- Titles are trimmed; an empty or whitespace-only title exits non-zero, prints\n  `title must not be empty` to stderr, and does not modify the database.\n- IDs start at 1 and increase monotonically.\n- `TODO_DB=/path todo list` prints one line per todo in ID order using exactly\n  `<id>\\t<status>\\t<title>`; new todos have status `active`.\n- State survives separate process invocations.\n- Add behavior-level tests. Use only the Go standard library.\n\n## Verification\n\n- `gofmt -w .`\n- `go test ./...`\n- `go vet ./...`\n",
+        "number": 1,
+        "title": "feat: persist and list todos"
+      },
+      "canonical_sha256": "b847bfeb94d91ba8a3be59782d6929d553bcaafb2f146cd9b5ee026901dcaf4b",
+      "labels": [],
+      "state": "open"
+    },
+    {
+      "canonical": {
+        "body": "# feat: complete and filter todos\n\nExtend the persisted CLI from issue #1.\n\n## Acceptance criteria\n\n- `TODO_DB=/path todo done <id>` changes an existing todo to `done` and prints\n  `completed <id>`.\n- Completing an already-done todo is idempotent and prints the same success.\n- A missing or malformed ID exits non-zero with a useful stderr message and\n  does not modify the database.\n- `todo list --status active` and `todo list --status done` emit only matching\n  rows in the same exact tab-separated format and ID order as issue #1.\n- An unsupported status exits non-zero and does not modify the database.\n- Preserve all issue #1 behavior and add behavior-level tests. Use only the Go\n  standard library.\n\n## Verification\n\n- `gofmt -w .`\n- `go test ./...`\n- `go vet ./...`\n",
+        "number": 2,
+        "title": "feat: complete and filter todos"
+      },
+      "canonical_sha256": "39c75e9c430b83abe49bc323af58c9ace47b834165c857038e340ef0600c80b6",
+      "labels": [],
+      "state": "open"
+    }
+  ],
+  "known_unmeasured": [
+    "external GitHub Codex review tokens",
+    "any external reviewer tokens",
+    "otherwise unreported nested or subagent tokens"
+  ],
+  "release": {
+    "asset": "aiops-platform_v0.1.16_darwin_arm64.tar.gz",
+    "asset_sha256": "13e4c0f6830f350f83f6545d47c4beba4efd2dc8aa9d42bff5e6394825f84c0a",
+    "attestation_predicate_types": [
+      "https://slsa.dev/provenance/v1"
+    ],
+    "attestation_verified": true,
+    "repository": "xrf9268-hue/aiops-platform",
+    "tag": "v0.1.16",
+    "tag_commit": "a7a973cb83c42c60f7f8d9d11c9d7b7dda08159f",
+    "worker_version": "v0.1.16"
+  },
+  "repository": {
+    "branch_protection": {
+      "allow_deletions": {
+        "enabled": false
+      },
+      "allow_force_pushes": {
+        "enabled": false
+      },
+      "enforce_admins": {
+        "enabled": true,
+        "url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/branches/main/protection/enforce_admins"
+      },
+      "required_conversation_resolution": {
+        "enabled": true
+      },
+      "required_pull_request_reviews": {
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": false,
+        "require_last_push_approval": true,
+        "required_approving_review_count": 1,
+        "url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/branches/main/protection/required_pull_request_reviews"
+      },
+      "required_status_checks": {
+        "checks": [
+          {
+            "app_id": 15368,
+            "context": "build-test"
+          }
+        ],
+        "contexts": [
+          "build-test"
+        ],
+        "contexts_url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/branches/main/protection/required_status_checks/contexts",
+        "strict": true,
+        "url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/branches/main/protection/required_status_checks"
+      }
+    },
+    "default_branch": "main",
+    "name": "zjlgdx/aiops-workflow-bench-high-20260715-1117-v1",
+    "seed": {
+      "commit": "5e6264cdcfd2decb53491e37de4f825878339487",
+      "parents": [],
+      "tree": "23e0ec67a9696108ffd32c1b503bfae5a61e7b34"
+    },
+    "seed_checks": [
+      {
+        "conclusion": "success",
+        "databaseId": 29465150420,
+        "event": "push",
+        "headSha": "5e6264cdcfd2decb53491e37de4f825878339487",
+        "status": "completed",
+        "url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/actions/runs/29465150420",
+        "workflowName": "build-test"
+      }
+    ],
+    "settings": {
+      "allow_auto_merge": false,
+      "allow_merge_commit": true,
+      "allow_rebase_merge": true,
+      "allow_squash_merge": true,
+      "delete_branch_on_merge": false,
+      "has_issues": true,
+      "has_projects": true,
+      "has_wiki": true,
+      "squash_merge_commit_message": "COMMIT_MESSAGES",
+      "squash_merge_commit_title": "COMMIT_OR_PR_TITLE"
+    },
+    "visibility": "public"
+  },
+  "role_correction": {
+    "attempted": "bytevane triage collaborator",
+    "before_activation": true,
+    "decision": "restore #1089 reviewer/setup/operator identity zjlgdx; do not grant push to bytevane",
+    "github_result": "HTTP 422 RepositoryInvitation.permissions invalid"
+  },
+  "roles": {
+    "maker": {
+      "expected": "xrf-9527",
+      "observed": "xrf-9527",
+      "permissions": {
+        "admin": false,
+        "maintain": false,
+        "pull": true,
+        "push": true,
+        "triage": true
+      }
+    },
+    "operator": {
+      "expected": "zjlgdx",
+      "observed": "zjlgdx",
+      "permissions": {
+        "admin": true,
+        "maintain": true,
+        "pull": true,
+        "push": true,
+        "triage": true
+      }
+    },
+    "reviewer": {
+      "expected": "zjlgdx",
+      "observed": "zjlgdx",
+      "permissions": {
+        "admin": true,
+        "maintain": true,
+        "pull": true,
+        "push": true,
+        "triage": true
+      }
+    },
+    "setup": {
+      "expected": "zjlgdx",
+      "observed": "zjlgdx",
+      "permissions": {
+        "admin": true,
+        "maintain": true,
+        "pull": true,
+        "push": true,
+        "triage": true
+      }
+    }
+  },
+  "workflows": {
+    "maker": {
+      "mode": "0o444",
+      "path": "/tmp/aiops-workflow-benchmark-20260715-1117/workflows/high-maker-WORKFLOW.md",
+      "sha256": "8b0c7f715394a1540aa529862dfdd9494b98c182a6d2ba23f3d919f1977468c7"
+    },
+    "reviewer": {
+      "mode": "0o444",
+      "path": "/tmp/aiops-workflow-benchmark-20260715-1117/workflows/high-reviewer-WORKFLOW.md",
+      "semantics": {
+        "exact_tuple_fast_path": true,
+        "external_bot_numeric_id": true,
+        "native_close": true,
+        "negative_real_process_probes": true,
+        "no_nested_review": true,
+        "paginated_graphql_threads": true
+      },
+      "sha256": "ce7727b4420c83ba0ac865557c5da29e47db0e351f33ab8352ef0787f90e43ee"
+    }
+  }
+}
