@@ -275,6 +275,21 @@ def validate_state_payload(state: dict[str, Any]) -> None:
                 )
 
 
+def validate_role_identities(
+    observed: dict[str, str], expected: dict[str, str]
+) -> None:
+    if observed != expected:
+        raise RuntimeError(
+            f"role identity mismatch: observed={observed}, expected={expected}"
+        )
+    if observed["maker"] == observed["reviewer"]:
+        raise RuntimeError("maker and reviewer GitHub identities must differ")
+    if observed["operator"] != observed["reviewer"]:
+        raise RuntimeError(
+            "personal-repository operator must reuse the comparison reviewer identity"
+        )
+
+
 def evaluate_limits(
     states: list[dict[str, Any]],
     baselines: list[int],
@@ -786,21 +801,16 @@ class Supervisor:
             "operator": self.args.operator_login,
         }
         observed = {role: client.identity() for role, client in clients.items()}
-        if observed != expected or len(set(observed.values())) != 3:
-            raise RuntimeError(
-                f"role identity mismatch: observed={observed}, expected={expected}"
-            )
+        validate_role_identities(observed, expected)
         permissions = {
             role: client.api(f"repos/{self.args.repo}").get("permissions") or {}
             for role, client in clients.items()
         }
         if not permissions["maker"].get("push"):
             raise RuntimeError("maker lacks push permission")
-        if permissions["operator"].get("push") or not permissions["operator"].get(
-            "triage"
-        ):
+        if not permissions["operator"].get("triage"):
             raise RuntimeError(
-                f"operator permission is not triage-only: {permissions['operator']}"
+                f"operator lacks issue-triage access: {permissions['operator']}"
             )
         issues = [
             self.operator.api(f"repos/{self.args.repo}/issues/{number}")
@@ -1261,7 +1271,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--reviewer-mirror-root", required=True)
     parser.add_argument("--maker-login", default="xrf-9527")
     parser.add_argument("--reviewer-login", default="zjlgdx")
-    parser.add_argument("--operator-login", default="bytevane")
+    parser.add_argument("--operator-login", default="zjlgdx")
     parser.add_argument("--maker-port", type=int, default=4928)
     parser.add_argument("--reviewer-port", type=int, default=4929)
     parser.add_argument("--state-poll-seconds", type=float, default=0.25)

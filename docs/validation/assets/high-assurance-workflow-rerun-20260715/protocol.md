@@ -57,7 +57,7 @@ contents through source, memory, or search; the report must not call it hidden.
 | Concurrency | one issue and one agent per worker |
 | Poll cadence | worker 30 seconds; supervisor state at most 250 ms, forge at most 5 seconds |
 | Maker / reviewer | `xrf-9527` / `zjlgdx` |
-| Operator | `bytevane`, triage only |
+| Operator | `zjlgdx`, shared with reviewer/setup as in #1089 |
 
 The v0.1.16 release must be identified by release API, attestation, checksum,
 `worker --version`, and state API version. The worker, workflows, workspaces,
@@ -69,10 +69,17 @@ manager or restart policy may replace either worker.
 1. #1089 used Codex 0.144.3. v0.1.16's generated app-server schema and
    real-mode doctor require exactly 0.144.4, so this rerun uses 0.144.4 instead
    of bypassing the version gate.
-2. #1089 used `zjlgdx` as reviewer and operator. Maker/reviewer identities stay
-   fixed, but activation uses triage-only `bytevane`. Distinct forge actors make
-   the no-repair boundary auditable and prevent the operator from pushing or
-   merging.
+2. The initial rerun protocol proposed triage-only `bytevane` to separate
+   activation from reviewer writes. Before activation, the live GitHub API
+   rejected that role on this user-owned repository with HTTP 422
+   `RepositoryInvitation.permissions invalid`: personal repositories do not
+   expose the organization-style `triage` collaborator role. Granting `push`
+   would unnecessarily authorize code mutation. The run therefore restores
+   #1089's exact identity contract: `zjlgdx` is setup, reviewer, and operator;
+   `xrf-9527` remains the distinct maker. The supervisor owns the only two
+   operator activation calls and records their timestamps, while final forge
+   events remain necessary to distinguish those calls from legitimate reviewer
+   writes. This feasibility correction is recorded before activation.
 3. The deleted #1089 high workflow cannot be recovered byte-for-byte. The new
    files start from the v0.1.16 examples and are frozen before activation. They
    preserve the high profile's negative/failure-path probes, mandatory external
@@ -149,8 +156,8 @@ It never changes a lifecycle label to stop work.
 Before activation, setup may create/configure the repository, accept role
 invitations, run dry-run push, run doctor, and freeze evidence. After activation:
 
-- `bytevane` may only perform the supervisor's issue 2 activation after issue 1
-  is confirmed closed;
+- the supervisor's `zjlgdx` operator client may only perform issue 2 activation
+  after issue 1 is confirmed closed;
 - read-only state/forge capture and pre-registered worker termination are
   allowed;
 - no operator code, branch, PR, issue body, lifecycle-label repair, workflow,
@@ -166,7 +173,8 @@ The run remains **NO-GO** until all are true:
 
 - fresh repository preserves seed commit/tree and exact two canonical issues;
 - required check, protection, merge settings, labels, and initial state match;
-- maker has write, reviewer has owner/write, operator has triage but not push;
+- maker has write, reviewer/setup/operator is the repository owner, and the
+  supervisor executable exposes no operator mutation other than activation;
 - official binaries/checksums/attestation and Codex 0.144.4 doctor pass;
 - workflows are complete, read-only, hashed, and prove #1090/#1102 semantics;
 - workspaces/mirrors are distinct and empty; workers are fresh and quiescent;

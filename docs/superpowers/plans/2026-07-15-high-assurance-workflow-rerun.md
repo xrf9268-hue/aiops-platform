@@ -11,7 +11,7 @@ commit and issue bodies. Separate maker and reviewer workers run the official
 v0.1.16 binary with isolated GitHub auth homes, workspaces, and mirror roots.
 A one-shot validation supervisor starts both workers, proves the loaded workflow
 paths against read-only files and expected SHA-256 values, performs only the two
-allowed label activations as a dedicated operator identity, samples both state
+allowed label activations through a dedicated operator client, samples both state
 APIs, and terminates both workers
 at the first cross-role session, token, external-signal, or wall-time limit.
 The supervisor is a committed validation asset, not a worker phase or recurring
@@ -107,7 +107,7 @@ Expected: both fake worker processes receive termination and the final event is
 Record before repository creation or activation:
 
 - seed `5e6264cdcfd2decb53491e37de4f825878339487` and the canonical issue JSON;
-- maker `xrf-9527`, reviewer/setup `zjlgdx`, operator `bytevane`;
+- maker `xrf-9527`, reviewer/setup/operator `zjlgdx`, matching #1089;
 - v0.1.16 release commit `a7a973cb83c42c60f7f8d9d11c9d7b7dda08159f`;
 - Codex 0.144.4, `gpt-5.6-sol`, high reasoning,
   `danger-full-access`, one issue/agent per worker, fixed issue order;
@@ -120,10 +120,12 @@ Record before repository creation or activation:
   generated app-server contract and real-mode doctor require exactly 0.144.4;
   using 0.144.4 is necessary to test the published worker without bypassing
   its version gate;
-- pre-registered audit deviation: #1089 used `zjlgdx` for both reviewer and
-  operator. The rerun preserves maker/reviewer identities but uses
-  `bytevane` only for activation so forge actors can prove that no operator
-  mutation is mistaken for reviewer behavior;
+- pre-activation feasibility correction: the proposed triage-only `bytevane`
+  role was rejected by GitHub with HTTP 422 because user-owned repositories do
+  not expose the organization-style `triage` collaborator role. Do not grant
+  broader `push` permission; restore #1089's `zjlgdx` reviewer/setup/operator
+  identity and use supervisor timestamps plus final forge events to audit the
+  two activation calls;
 - capability-surface limitation: #1089 did not inventory inherited Codex
   skills, plugins, MCP servers, Apps, or global instructions. Preserve the
   normal local binary inheritance required by AGENTS.md, but record a
@@ -169,9 +171,9 @@ printing tokens. Verify:
 maker=xrf-9527
 reviewer=zjlgdx
 setup=zjlgdx
-operator=bytevane
+operator=zjlgdx
 maker != reviewer
-operator != maker and operator != reviewer
+operator = reviewer
 ```
 
 Run `gh auth setup-git` for each role. Never commit these homes or tokens.
@@ -209,9 +211,10 @@ Create a fresh public repository named
 `zjlgdx/aiops-workflow-bench-high-20260715-1117-v1`. Push the unchanged root
 commit as `main`; require its SHA to remain exactly the fixed seed. Create the
 two canonical issues, in order, with no active labels. Add the five lifecycle
-labels, invite `xrf-9527` with `push` and `bytevane` with `triage`, accept with
-their respective identities, require maker `WRITE`, and keep the operator
-unable to push or merge.
+labels, invite `xrf-9527` with `push`, accept with the maker identity, and
+require maker `WRITE`. Reuse the `zjlgdx` owner credential for
+reviewer/setup/operator as in #1089; the supervisor, not repository role
+reduction, constrains activation writes.
 
 Configure the same required `build-test` status, one approval, stale-approval
 dismissal, last-push approval, conversation resolution, enforced admins, and

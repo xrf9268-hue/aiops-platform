@@ -159,6 +159,25 @@ class AccountingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "running"):
             supervisor.validate_state_payload(missing_running)
 
+    def test_personal_repo_role_contract_reuses_reviewer_as_operator(self):
+        observed = {
+            "maker": "xrf-9527",
+            "reviewer": "zjlgdx",
+            "operator": "zjlgdx",
+        }
+
+        supervisor.validate_role_identities(observed, observed)
+
+    def test_role_contract_still_requires_distinct_maker(self):
+        observed = {
+            "maker": "zjlgdx",
+            "reviewer": "zjlgdx",
+            "operator": "zjlgdx",
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "maker and reviewer"):
+            supervisor.validate_role_identities(observed, observed)
+
 
 class ExternalReviewTests(unittest.TestCase):
     def setUp(self):
