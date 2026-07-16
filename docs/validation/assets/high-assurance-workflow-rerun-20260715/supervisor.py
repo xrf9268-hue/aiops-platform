@@ -54,6 +54,10 @@ class LimitBreach:
     limit: float | int
 
 
+class CounterRegressionError(ValueError):
+    """A monotonic worker token counter moved backwards."""
+
+
 @dataclasses.dataclass(frozen=True)
 class WorkerSpec:
     role: str
@@ -196,6 +200,58 @@ def canonical_issue_hash(issue: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def workflow_workspace_root(workflow: Path) -> Path:
+    lines = workflow.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0] != "---":
+        raise ValueError(f"workflow lacks YAML front matter: {workflow}")
+    try:
+        end = lines.index("---", 1)
+    except ValueError as exc:
+        raise ValueError(f"workflow front matter is not closed: {workflow}") from exc
+    roots: list[str] = []
+    in_workspace = False
+    for line in lines[1:end]:
+        if line == "workspace:":
+            in_workspace = True
+            continue
+        if in_workspace and line and not line[0].isspace():
+            in_workspace = False
+        if not in_workspace:
+            continue
+        match = re.fullmatch(r"  root:\s*(.+?)\s*", line)
+        if match:
+            value = match.group(1)
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            roots.append(value)
+    if len(roots) != 1:
+        raise ValueError(
+            f"workflow must declare exactly one workspace.root: {workflow}"
+        )
+    root = Path(roots[0])
+    if not root.is_absolute():
+        raise ValueError(f"workflow workspace.root must be absolute: {root}")
+    return root.resolve()
+
+
+def validate_fresh_directories(
+    directories: dict[str, Path],
+) -> dict[str, dict[str, Any]]:
+    resolved = {name: path.resolve() for name, path in directories.items()}
+    if len(set(resolved.values())) != len(resolved):
+        raise ValueError(f"run directories must be pairwise distinct: {resolved}")
+    manifest: dict[str, dict[str, Any]] = {}
+    for name, path in resolved.items():
+        existed = path.exists()
+        if existed and not path.is_dir():
+            raise ValueError(f"{name} is not a directory: {path}")
+        entries = sorted(item.name for item in path.iterdir()) if existed else []
+        if entries:
+            raise ValueError(f"{name} must be empty: {path} contains {entries}")
+        manifest[name] = {"path": str(path), "existed": existed, "empty": True}
+    return manifest
+
+
 def token_total(state: dict[str, Any]) -> int:
     totals = state.get("codex_totals")
     value = totals.get("total_tokens") if isinstance(totals, dict) else None
@@ -211,7 +267,7 @@ def token_delta(states: list[dict[str, Any]], baselines: list[int]) -> int:
     for index, (state, baseline) in enumerate(zip(states, baselines, strict=True)):
         current = token_total(state)
         if current < baseline:
-            raise ValueError(
+            raise CounterRegressionError(
                 f"worker {index} token counter regressed from baseline {baseline} to {current}"
             )
         total += current - baseline
@@ -717,7 +773,6 @@ class Supervisor:
         self.args = args
         self.run_root = Path(args.run_root).resolve()
         self.event_log = self.run_root / "evidence" / "events.jsonl"
-        self.raw_dir = self.run_root / "evidence" / "raw"
         self.operator = GhClient(Path(args.operator_gh_config_dir).resolve())
         self.workers: list[WorkerProcess] = []
         self.trigger_tuples: dict[int, ReviewTuple] = {}
@@ -842,6 +897,19 @@ class Supervisor:
                     for issue in issues
                 ],
             },
+        )
+
+    def verify_run_directories(self) -> None:
+        directories: dict[str, Path] = {}
+        for spec in self.specs():
+            directories[f"{spec.role}_workspace"] = workflow_workspace_root(
+                spec.workflow
+            )
+            directories[f"{spec.role}_mirror"] = spec.mirror_root
+        manifest = validate_fresh_directories(directories)
+        append_event(
+            self.event_log,
+            {"event": "preflight_directories", "directories": manifest},
         )
 
     def start_workers(self) -> None:
@@ -1099,7 +1167,7 @@ class Supervisor:
                 for index, state in enumerate(states):
                     current = token_total(state)
                     if current < previous_totals[index]:
-                        raise ValueError(
+                        raise CounterRegressionError(
                             f"worker {index} token counter regressed "
                             f"from {previous_totals[index]} to {current}"
                         )
@@ -1116,13 +1184,14 @@ class Supervisor:
                     elapsed_seconds=now - started,
                     issue_closed=is_closed(forge),
                 )
-            except ValueError as exc:
-                reason = (
-                    "counter_regression"
-                    if "regressed" in str(exc)
-                    else "token_accounting_failed"
+            except CounterRegressionError as exc:
+                breach = LimitBreach("counter_regression", 1, 0)
+                self.abort(
+                    issue_number, breach, states, {"error": str(exc), "forge": forge}
                 )
-                breach = LimitBreach(reason, 1, 0)
+                return False, states
+            except ValueError as exc:
+                breach = LimitBreach("token_accounting_failed", 1, 0)
                 self.abort(
                     issue_number, breach, states, {"error": str(exc), "forge": forge}
                 )
@@ -1217,6 +1286,7 @@ class Supervisor:
     def run(self) -> int:
         self.run_root.mkdir(parents=True, exist_ok=True)
         self.verify_files()
+        self.verify_run_directories()
         self.verify_identities_and_initial_state()
         try:
             self.start_workers()

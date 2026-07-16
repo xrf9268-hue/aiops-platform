@@ -7,9 +7,9 @@
   "result": "aborted_fail_closed",
   "verdict": "keep disabled pending a named defect",
   "named_defect": {
-    "name": "PR-present forge snapshot cannot satisfy the five-second evidence deadline",
+    "name": "validation supervisor cannot satisfy or prove its controlled evidence contract",
     "scope": "one-shot validation supervisor",
-    "description": "After an issue comment exposed PR #3, forge_snapshot performed six sequential gh subprocess reads under one five-second overall deadline. The live arm exceeded that deadline and a persisted post-abort read-only call of the identical function took 7.355921 seconds.",
+    "description": "After an issue comment exposed PR #3, forge_snapshot performed six sequential gh subprocess reads under one five-second overall deadline. The live arm exceeded that deadline and a persisted post-abort read-only call of the identical function took 7.355921 seconds. Final review also proved that the at-activation supervisor neither rejected nor persisted equal or non-empty workspace/mirror roots, so the committed evidence cannot prove that preregistered precondition.",
     "effect": "The fixed arm stopped before reviewer, external-review, merge, issue-2, or holdout evidence could be collected; the high-assurance profile therefore remains uncertified."
   },
   "pins": {
@@ -23,8 +23,13 @@
     "approval_policy": "never",
     "max_concurrent_agents_per_worker": 1,
     "required_check": "build-test",
-    "protocol_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
-    "supervisor_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
+    "protocol_at_activation_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
+    "published_protocol_sha256": "31c4bd49690a320daaf5e3d0c44e6b987aab0bb439d4aa514c0da4a9d41c111c",
+    "protocol_at_activation_patch_sha256": "d091f499be0bc13f389bbac478f4cc8c52ccca5cf6b7a95ba4b25465932e0437",
+    "supervisor_at_activation_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
+    "published_supervisor_sha256": "f09c26a64768e78c1f7aec606b202912abba7925607c2352d4ccc61f72a74bfa",
+    "supervisor_at_activation_patch_sha256": "f50810d3efcc6a8cbe99d346654cebe01ff96d5518d92544f99e970f1d2eaacf",
+    "at_activation_artifact_manifest_sha256": "36b0bce8935c24e0db5cc2324dc43c4d508330e1877f60f78bafcbdb4b2b0166",
     "holdout_sha256": "cc389a18573c0687b77ee510f1779750322300a302483293599f6779ed153a21",
     "maker_workflow_sha256": "8b0c7f715394a1540aa529862dfdd9494b98c182a6d2ba23f3d919f1977468c7",
     "reviewer_workflow_sha256": "ce7727b4420c83ba0ac865557c5da29e47db0e351f33ab8352ef0787f90e43ee",
@@ -165,5 +170,16 @@
     "observed_continuations": 0,
     "separate_issue_required": false,
     "reason": "The arm stopped before any continuation; it provides no evidence that SPEC's one-second continuation caused waste."
+  },
+  "post_run_review": {
+    "at_activation_evidence_gap": "Distinct and empty workspace/mirror roots were manually checked but neither enforced nor persisted by the at-activation supervisor; this report does not treat the unpersisted observation as proof.",
+    "published_supervisor_hardening": [
+      "derive workspace roots from both frozen workflow front matters",
+      "reject any equal, non-directory, or non-empty workspace/mirror root",
+      "persist a preflight_directories event before forge reads or worker start",
+      "classify token-counter regression with a dedicated exception",
+      "remove the unused raw_dir field"
+    ],
+    "effect_on_result": "None. Post-run hardening cannot rehabilitate the stopped arm; a fresh protocol and repository are required."
   }
 }

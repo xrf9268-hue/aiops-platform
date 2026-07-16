@@ -12,13 +12,18 @@ Keep the high-assurance profile disabled. The fixed arm did not reach reviewer,
 external-review, merge, issue-2, or holdout evidence because the one-shot
 validation supervisor failed closed on its first PR-present forge snapshot.
 
-The named defect is in the validation evidence path: `forge_snapshot` performs
-six sequential `gh` subprocess reads once a PR-link comment exists, while the
-approved supervisor gives the entire snapshot one five-second deadline. The
-live arm exceeded that deadline. A persisted read-only post-abort invocation
-of the same function took 7.355921 seconds while GitHub REST and GraphQL quotas
-remained above 97%. This does not prove the profile itself failed, but it
-prevents the required operational certification.
+The named defect is that the validation supervisor cannot satisfy or prove its
+controlled evidence contract. First, `forge_snapshot` performs six sequential
+`gh` subprocess reads once a PR-link comment exists, while the approved
+supervisor gives the entire snapshot one five-second deadline. The live arm
+exceeded that deadline. A persisted read-only post-abort invocation of the same
+function took 7.355921 seconds while GitHub REST and GraphQL quotas remained
+above 97%. Second, final review proved that the at-activation supervisor did
+not reject or persist equal/non-empty workspace and mirror roots. The operator
+checked those roots before activation, but no immutable artifact preserved the
+result, so this report does not use that observation as proof. These defects do
+not prove the profile itself failed, but they prevent the required operational
+certification.
 
 ## Controlled protocol
 
@@ -33,6 +38,9 @@ frozen before activation. The main evidence is:
 - [machine-readable summary](assets/high-assurance-workflow-rerun-20260715/summary.json)
 - [forge timeline](assets/high-assurance-workflow-rerun-20260715/forge-timeline.json)
 - [post-abort read-only probe](assets/high-assurance-workflow-rerun-20260715/post-abort-probe.json)
+- [at-activation artifact manifest](assets/high-assurance-workflow-rerun-20260715/at-activation-artifacts.json)
+- [at-activation supervisor reconstruction patch](assets/high-assurance-workflow-rerun-20260715/supervisor-at-activation.patch)
+- [at-activation protocol reconstruction patch](assets/high-assurance-workflow-rerun-20260715/protocol-at-activation.patch)
 - [state manifest](assets/high-assurance-workflow-rerun-20260715/raw-state-manifest.json)
 - [supervisor-persisted state payloads](assets/high-assurance-workflow-rerun-20260715/raw-state/)
 
@@ -62,6 +70,12 @@ to native `Closes #N`; and this run added the capability-surface manifest that
 GitHub's user-owned-repository permission model before activation, so the run
 restored #1089's `zjlgdx` setup/reviewer/operator identity without granting
 `bytevane` push permission.
+
+The published protocol header now distinguishes its initial preregistration
+from that post-repository, pre-activation permission amendment. The exact
+at-activation protocol and supervisor remain reconstructable from the
+published files plus the adjacent patches; their SHA-256 values are recorded
+in `summary.json`.
 
 ## Observed run
 
@@ -101,6 +115,15 @@ followed the PR-present six-read path and breached the overall deadline. The
 required check, exact tuple, zero reviews, and zero review threads were
 confirmed only by a read-only GitHub reread after termination and are marked as
 post-abort evidence.
+
+Final review also found that the at-activation supervisor did not enforce or
+persist the activation gate requiring pairwise-distinct, empty maker/reviewer
+workspaces and mirror roots. The published supervisor now derives workspace
+roots from both workflow front matters, rejects duplicate or non-empty roots,
+and persists `preflight_directories` before forge reads or worker start. It
+also replaces error-text classification with a dedicated counter-regression
+exception and removes an unused field. Those post-run fixes improve the next
+run only; they do not retroactively validate this one.
 
 ## Comparison with the valid #1089 standard arm
 

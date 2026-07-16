@@ -1,7 +1,10 @@
-# High-assurance workflow rerun preregistration
+# High-assurance workflow rerun preregistration and pre-activation amendment
 
-Recorded on 2026-07-15 before creation of the disposable repository, before
-either issue existed in that repository, and before either worker started.
+The initial decision rule and stop contract were recorded on 2026-07-15 before
+creation of the disposable repository. After repository creation but before
+issue activation or worker start, the live permission check produced the
+explicit feasibility amendment in item 2 below; no outcome data existed when
+that amendment was frozen.
 
 ## Question and decision rule
 

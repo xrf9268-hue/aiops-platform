@@ -60,7 +60,7 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(supervisor.token_delta(states, baselines), 3_499_901)
 
     def test_token_delta_fails_closed_on_counter_regression(self):
-        with self.assertRaisesRegex(ValueError, "regressed"):
+        with self.assertRaisesRegex(supervisor.CounterRegressionError, "regressed"):
             supervisor.token_delta([state(total=99), state(total=200)], [100, 200])
 
     def test_process_token_delta_must_match_issue_attributed_usage(self):
@@ -177,6 +177,147 @@ class AccountingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "maker and reviewer"):
             supervisor.validate_role_identities(observed, observed)
+
+
+class RunDirectoryTests(unittest.TestCase):
+    def write_workflow(self, path, workspace_root):
+        path.write_text(
+            f"---\nworkspace:\n  root: {workspace_root}\nagent:\n  max_concurrent_agents: 1\n---\n",
+            encoding="utf-8",
+        )
+
+    def test_workspace_root_is_read_from_front_matter(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workflow = root / "WORKFLOW.md"
+            expected = root / "workspace"
+            self.write_workflow(workflow, expected)
+
+            self.assertEqual(
+                supervisor.workflow_workspace_root(workflow), expected.resolve()
+            )
+
+    def test_fresh_directories_reject_duplicate_resolved_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shared = root / "shared"
+
+            with self.assertRaisesRegex(ValueError, "must be pairwise distinct"):
+                supervisor.validate_fresh_directories(
+                    {
+                        "maker_workspace": shared,
+                        "reviewer_workspace": root / "reviewer-workspace",
+                        "maker_mirror": root / "maker-mirror",
+                        "reviewer_mirror": shared,
+                    }
+                )
+
+    def test_fresh_directories_reject_nonempty_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            nonempty = root / "maker-workspace"
+            nonempty.mkdir()
+            (nonempty / "stale").write_text("stale", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "must be empty"):
+                supervisor.validate_fresh_directories(
+                    {
+                        "maker_workspace": nonempty,
+                        "reviewer_workspace": root / "reviewer-workspace",
+                        "maker_mirror": root / "maker-mirror",
+                        "reviewer_mirror": root / "reviewer-mirror",
+                    }
+                )
+
+    def test_supervisor_persists_distinct_empty_directory_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            maker_workspace = root / "maker-workspace"
+            reviewer_workspace = root / "reviewer-workspace"
+            maker_mirror = root / "maker-mirror"
+            reviewer_mirror = root / "reviewer-mirror"
+            maker_workspace.mkdir()
+            maker_mirror.mkdir()
+            maker_workflow = root / "maker-WORKFLOW.md"
+            reviewer_workflow = root / "reviewer-WORKFLOW.md"
+            self.write_workflow(maker_workflow, maker_workspace)
+            self.write_workflow(reviewer_workflow, reviewer_workspace)
+            args = types.SimpleNamespace(
+                run_root=str(root), operator_gh_config_dir=str(root / "operator-auth")
+            )
+
+            class DirectorySupervisor(supervisor.Supervisor):
+                def specs(self):
+                    return [
+                        supervisor.WorkerSpec(
+                            "maker",
+                            4928,
+                            maker_workflow,
+                            "unused",
+                            root / "maker-auth",
+                            "maker",
+                            maker_mirror,
+                            "TEST_MAKER_TOKEN",
+                        ),
+                        supervisor.WorkerSpec(
+                            "reviewer",
+                            4929,
+                            reviewer_workflow,
+                            "unused",
+                            root / "reviewer-auth",
+                            "reviewer",
+                            reviewer_mirror,
+                            "TEST_REVIEWER_TOKEN",
+                        ),
+                    ]
+
+            loop = DirectorySupervisor(args)
+            loop.verify_run_directories()
+
+            event = json.loads(loop.event_log.read_text(encoding="utf-8"))
+            self.assertEqual(event["event"], "preflight_directories")
+            self.assertEqual(
+                set(event["directories"]),
+                {
+                    "maker_workspace",
+                    "reviewer_workspace",
+                    "maker_mirror",
+                    "reviewer_mirror",
+                },
+            )
+            self.assertTrue(event["directories"]["maker_workspace"]["existed"])
+            self.assertFalse(event["directories"]["reviewer_workspace"]["existed"])
+            self.assertTrue(
+                all(item["empty"] for item in event["directories"].values())
+            )
+
+    def test_run_wires_directory_gate_before_forge_or_workers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = types.SimpleNamespace(
+                run_root=str(root), operator_gh_config_dir=str(root / "operator-auth")
+            )
+            calls = []
+
+            class GateSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    calls.append("files")
+
+                def verify_run_directories(self):
+                    calls.append("directories")
+                    raise RuntimeError("directory gate stopped activation")
+
+                def verify_identities_and_initial_state(self):
+                    calls.append("forge")
+
+                def start_workers(self):
+                    calls.append("workers")
+
+            loop = GateSupervisor(args)
+            with self.assertRaisesRegex(RuntimeError, "directory gate"):
+                loop.run()
+
+            self.assertEqual(calls, ["files", "directories"])
 
 
 class ExternalReviewTests(unittest.TestCase):
@@ -746,6 +887,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
 
             class StartFailureSupervisor(supervisor.Supervisor):
                 def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
                     return None
 
                 def verify_identities_and_initial_state(self):
