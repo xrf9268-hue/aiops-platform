@@ -1,0 +1,405 @@
+{
+  "decision": "GO",
+  "freeze_timestamp": "2026-07-17T04:13:26Z",
+  "pending": [],
+  "repository": {
+    "name": "zjlgdx/aiops-workflow-bench-high-20260717-1128-v1",
+    "visibility": "public",
+    "default_branch": "main",
+    "seed": {
+      "commit": "03865606188dbda2161cc1c98c40f454312fcdd4",
+      "tree": "23e0ec67a9696108ffd32c1b503bfae5a61e7b34",
+      "parents": []
+    },
+    "seed_check": {
+      "id": 29551358525,
+      "name": "build-test",
+      "event": "push",
+      "head_sha": "03865606188dbda2161cc1c98c40f454312fcdd4",
+      "status": "completed",
+      "conclusion": "success",
+      "run_attempt": 1,
+      "created_at": "2026-07-17T03:01:24Z",
+      "updated_at": "2026-07-17T03:01:47Z"
+    },
+    "merge_settings": {
+      "allow_auto_merge": false,
+      "allow_merge_commit": true,
+      "allow_rebase_merge": true,
+      "allow_squash_merge": true,
+      "delete_branch_on_merge": false,
+      "squash_merge_commit_message": "COMMIT_MESSAGES",
+      "squash_merge_commit_title": "COMMIT_OR_PR_TITLE"
+    },
+    "branch_protection": {
+      "enforce_admins": true,
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "build-test"
+        ],
+        "checks": [
+          {
+            "app_id": 15368,
+            "context": "build-test"
+          }
+        ]
+      },
+      "required_pull_request_reviews": {
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": false,
+        "require_last_push_approval": true,
+        "required_approving_review_count": 1
+      },
+      "required_conversation_resolution": true,
+      "required_linear_history": false,
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "block_creations": false,
+      "lock_branch": false,
+      "allow_fork_syncing": false,
+      "restrictions": null
+    },
+    "lifecycle_labels": [
+      "aiops:blocked",
+      "aiops:canceled",
+      "aiops:human-review",
+      "aiops:rework",
+      "aiops:todo"
+    ],
+    "initial_issues": [
+      {
+        "number": 1,
+        "state": "open",
+        "labels": [],
+        "title": "feat: persist and list todos"
+      },
+      {
+        "number": 2,
+        "state": "open",
+        "labels": [],
+        "title": "feat: complete and filter todos"
+      }
+    ],
+    "initial_pull_requests": [],
+    "maker_collaborator_provisioning": {
+      "completed_before_freeze": true,
+      "invitation_result": "201 Created and maker accepted",
+      "user": "xrf-9527",
+      "permission": "write",
+      "role_name": "write"
+    }
+  },
+  "roles": {
+    "maker": {
+      "expected": "xrf-9527",
+      "observed_in_final_container": "xrf-9527",
+      "permissions": {
+        "admin": false,
+        "maintain": false,
+        "pull": true,
+        "push": true,
+        "triage": true
+      }
+    },
+    "reviewer": {
+      "expected": "zjlgdx",
+      "observed_in_final_container": "zjlgdx",
+      "permissions": {
+        "admin": true,
+        "maintain": true,
+        "pull": true,
+        "push": true,
+        "triage": true
+      }
+    },
+    "setup_operator": {
+      "expected": "zjlgdx",
+      "observed": "zjlgdx",
+      "permissions": {
+        "admin": true,
+        "maintain": true,
+        "pull": true,
+        "push": true,
+        "triage": true
+      }
+    },
+    "container_gh_config": {
+      "home_config_mode": "0700",
+      "gh_config_mode": "0700",
+      "hosts_file_mode": "0600",
+      "maker_and_reviewer_sources_distinct": true
+    }
+  },
+  "frozen_files": {
+    "protocol": {
+      "path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/protocol.md",
+      "sha256": "93507b7a3b1f969d8fb53b442e8572a27f9fd8d8b290a9b28172e011ca37ea1e"
+    },
+    "controller": {
+      "path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/controller.py",
+      "sha256": "bf7e077b7ff5b993295a73b28f713e19fad935a0d873dcd362683cce052e111c"
+    },
+    "controller_tests": {
+      "path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/controller_test.py",
+      "sha256": "ff1363df5adb247797be656ecc0fd1fa057bcdae0b28b9aa4bd189347b9d3d90"
+    },
+    "maker_workflow": {
+      "path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/maker-WORKFLOW.md",
+      "sha256": "b4efe35c2dceb6706a36e78e8be275a62d60c19a6fe1d33a08f114d3091a3412"
+    },
+    "reviewer_workflow": {
+      "path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/reviewer-WORKFLOW.md",
+      "sha256": "ec9228cf559a322913f3bf49fab10a96628633102af80639939c94674c43c548"
+    },
+    "holdout": {
+      "path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/holdout.sh",
+      "sha256": "cc389a18573c0687b77ee510f1779750322300a302483293599f6779ed153a21"
+    }
+  },
+  "canonical_inputs": {
+    "issue_1_sha256": "b847bfeb94d91ba8a3be59782d6929d553bcaafb2f146cd9b5ee026901dcaf4b",
+    "issue_2_sha256": "39c75e9c430b83abe49bc323af58c9ace47b834165c857038e340ef0600c80b6",
+    "historical_same_tree_commit": "5e6264cdcfd2decb53491e37de4f825878339487",
+    "historical_holdout_sha256": "cc389a18573c0687b77ee510f1779750322300a302483293599f6779ed153a21"
+  },
+  "image": {
+    "tag": "aiops-platform:1128-v0.1.16",
+    "id": "sha256:c4418af6b37171c413b46b677873f08ca957f0f452f8c3ba1d1b094acbefa752",
+    "digest": "sha256:c4418af6b37171c413b46b677873f08ca957f0f452f8c3ba1d1b094acbefa752",
+    "os": "linux",
+    "architecture": "arm64",
+    "config_user": "501:20",
+    "default_user": "uid=501(aiops) gid=20(dialout) groups=20(dialout)",
+    "release_commit": "a7a973cb83c42c60f7f8d9d11c9d7b7dda08159f",
+    "release_dockerfile_sha256": "36935a5c416e5843d09d05513e0420e809b23343fe4cc91c1138ce2fafda7c08",
+    "worker_version": "v0.1.16",
+    "codex_version": "codex-cli 0.144.4"
+  },
+  "docker": {
+    "server_version": "28.3.2",
+    "api_version": "1.51",
+    "minimum_api_version": "1.24",
+    "os": "linux",
+    "architecture": "arm64",
+    "kernel_version": "6.10.14-linuxkit"
+  },
+  "containers": {
+    "maker": {
+      "container_id": "05947691c3070c6b2367d82d267faf7f890fac034e931c4cb3f9006d6dd4dd62",
+      "name": "aiops-1128-run-maker",
+      "no_published_state_port": true,
+      "forbidden_config_env_absent": [
+        "AIOPS_STATE_API_TOKEN",
+        "AIOPS_TRACKER_SECRET",
+        "GITHUB_TOKEN",
+        "GH_TOKEN"
+      ],
+      "mounts": [
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/maker-workspace", "/workspaces", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/maker-mirror", "/mirrors", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/maker-codex-home", "/home/aiops/.codex", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/maker-gh", "/home/aiops/.config", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/maker-secrets/github_token", "/run/secrets/github_token", false],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/maker-secrets/aiops_state_api_token", "/run/secrets/aiops_state_api_token", false],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/maker-secrets/state_wgetrc", "/run/secrets/state_wgetrc", false]
+      ],
+      "writable_probe": {
+        "user": "aiops",
+        "uid": 501,
+        "gid": 20,
+        "destinations": ["/workspaces", "/mirrors", "/home/aiops/.codex", "/home/aiops/.config"],
+        "create_write_fsync_read_delete": "PASS"
+      },
+      "state": {
+        "transport": "bounded docker exec to container loopback",
+        "unauthenticated_status": 401,
+        "authenticated_schema_valid": true,
+        "mounted_token_matches_request_config": true,
+        "version": "v0.1.16",
+        "agent_default": "codex-app-server",
+        "total_tokens": 0,
+        "live_rows": 0
+      }
+    },
+    "reviewer": {
+      "container_id": "d412df119d329fbb0eae49786e492e254ce6ee514be5c21bd2630603d764dc9c",
+      "name": "aiops-1128-run-reviewer",
+      "no_published_state_port": true,
+      "forbidden_config_env_absent": [
+        "AIOPS_STATE_API_TOKEN",
+        "AIOPS_TRACKER_SECRET",
+        "GITHUB_TOKEN",
+        "GH_TOKEN"
+      ],
+      "mounts": [
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/reviewer-workspace", "/workspaces", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/reviewer-mirror", "/mirrors", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/reviewer-codex-home", "/home/aiops/.codex", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/reviewer-gh", "/home/aiops/.config", true],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/reviewer-secrets/github_token", "/run/secrets/github_token", false],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/reviewer-secrets/aiops_state_api_token", "/run/secrets/aiops_state_api_token", false],
+        ["/private/tmp/aiops-workflow-benchmark-20260717-1128/runtime/reviewer-secrets/state_wgetrc", "/run/secrets/state_wgetrc", false]
+      ],
+      "writable_probe": {
+        "user": "aiops",
+        "uid": 501,
+        "gid": 20,
+        "destinations": ["/workspaces", "/mirrors", "/home/aiops/.codex", "/home/aiops/.config"],
+        "create_write_fsync_read_delete": "PASS"
+      },
+      "state": {
+        "transport": "bounded docker exec to container loopback",
+        "unauthenticated_status": 401,
+        "authenticated_schema_valid": true,
+        "mounted_token_matches_request_config": true,
+        "version": "v0.1.16",
+        "agent_default": "codex-app-server",
+        "total_tokens": 0,
+        "live_rows": 0
+      }
+    }
+  },
+  "runtime_settings": {
+    "shared": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high",
+      "thread_sandbox": "danger-full-access",
+      "turn_sandbox_policy": "dangerFullAccess",
+      "approval_policy": {
+        "mcp_elicitations": false,
+        "request_permissions": false,
+        "rules": false,
+        "sandbox_approval": false,
+        "skill_approval": false
+      },
+      "poll_interval_ms": 30000,
+      "max_concurrent_agents": 1,
+      "workspace_root": "/workspaces",
+      "read_timeout_ms": 30000,
+      "turn_timeout_ms": 3600000,
+      "stall_timeout_ms": 300000
+    },
+    "maker": {
+      "workflow_path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/maker-WORKFLOW.md",
+      "tracker_active_states": ["aiops:todo", "aiops:rework"],
+      "tracker_inactive_states": ["aiops:human-review", "aiops:blocked", "aiops:canceled"],
+      "max_turns": 30,
+      "max_continuation_turns": 30,
+      "max_tokens_per_claim": 20000000,
+      "max_runtime_seconds_per_claim": 7200,
+      "verify_commands": ["gofmt -l .", "go test ./...", "go vet ./..."]
+    },
+    "reviewer": {
+      "workflow_path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/reviewer-WORKFLOW.md",
+      "tracker_active_states": ["aiops:human-review"],
+      "tracker_inactive_states": ["aiops:todo", "aiops:rework", "aiops:blocked", "aiops:canceled"],
+      "max_turns": 18,
+      "max_continuation_turns": 48,
+      "max_tokens_per_claim": 12000000,
+      "max_runtime_seconds_per_claim": 7200,
+      "verify_commands": []
+    }
+  },
+  "semantics": {
+    "issue_1090": {
+      "exact_tuple_checkpoint": true,
+      "same_tuple_fast_path": true,
+      "at_most_one_codex_trigger_per_tuple": true
+    },
+    "issue_1102": {
+      "maker_uses_refs_only": true,
+      "reviewer_squash_body_closes_issue": true,
+      "merged_but_open_fallback": true
+    }
+  },
+  "preactivation_evidence": {
+    "events_path": "/Users/yvan/developer/.worktrees/aiops-platform/codex-agent-system-remediation/docs/validation/assets/high-assurance-container-rerun-20260717/events.jsonl",
+    "root_validation": {
+      "last_timestamp": "2026-07-17T04:04:23.105320Z",
+      "workspace_and_mirror_sources_empty_distinct_non_nested": true
+    },
+    "forge_timeout_injection": {
+      "timestamp": "2026-07-17T04:03:47.322281Z",
+      "stage_id": "preactivation-timeout-injection/03-pr",
+      "reason": "timeout",
+      "partial_keys": ["issue", "issue_comments"],
+      "process_reaped": true,
+      "controller_processes_active": 0
+    },
+    "shutdown_injection": {
+      "started_at": "2026-07-17T04:03:51.551325Z",
+      "both_requests_persisted_before_wait": true,
+      "term_resistant_setsids": true,
+      "readiness_files_removed": true,
+      "containers": [
+        {
+          "role": "maker",
+          "container_id": "c794b31e5304c9c65784cb5471e1c1441e939ed75256f4c87a1e69f05aedf937",
+          "requested_at": "2026-07-17T04:03:51.551473Z",
+          "terminal_at": "2026-07-17T04:03:51.771723Z",
+          "docker_wait_exit": 0,
+          "running": false,
+          "pid": 0,
+          "inspect_exit_code": 0
+        },
+        {
+          "role": "reviewer",
+          "container_id": "1a0fa17973fd7466768e54f2dbf05166c164ae33a7e1ec62b2a4f22fc3cc6c45",
+          "requested_at": "2026-07-17T04:03:51.553070Z",
+          "terminal_at": "2026-07-17T04:03:51.817281Z",
+          "docker_wait_exit": 0,
+          "running": false,
+          "pid": 0,
+          "inspect_exit_code": 0
+        }
+      ]
+    }
+  },
+  "verification": {
+    "py_compile": "PASS",
+    "ruff_format_check": "PASS",
+    "ruff_check": "PASS",
+    "controller_tests": {
+      "count": 30,
+      "fresh_consecutive_runs": 3,
+      "durations_seconds": [8.326, 7.361, 6.993],
+      "result": "PASS"
+    },
+    "correctness_review": {
+      "result": "PASS",
+      "controller_sha256": "bf7e077b7ff5b993295a73b28f713e19fad935a0d873dcd362683cce052e111c",
+      "controller_tests_sha256": "ff1363df5adb247797be656ecc0fd1fa057bcdae0b28b9aa4bd189347b9d3d90",
+      "protocol_sha256": "93507b7a3b1f969d8fb53b442e8572a27f9fd8d8b290a9b28172e011ca37ea1e"
+    },
+    "simplification_review": {
+      "result": "PASS",
+      "deletion_test": "PASS",
+      "new_service_or_generic_supervisor": false,
+      "scope_drift": false
+    },
+    "secret_value_scan": "PASS"
+  },
+  "comparison": {
+    "issue_1089_standard_arm": {
+      "accepted_issues": 2,
+      "worker_observed_tokens": 4206604,
+      "worker_runtime_seconds": 1058.7,
+      "wall_seconds": 1166,
+      "rework_claims": 0,
+      "fixed_holdout": "PASS"
+    }
+  },
+  "known_unmeasured": [
+    "external GitHub Codex review tokens",
+    "any external reviewer tokens",
+    "otherwise unreported nested or subagent tokens"
+  ],
+  "post_freeze_authorized_actions": [
+    "activate issue 1 with aiops:todo",
+    "activate issue 2 only after issue 1 completion",
+    "read evidence",
+    "fail-closed stop of both exact containers",
+    "run fixed holdout after both issues close"
+  ]
+}
