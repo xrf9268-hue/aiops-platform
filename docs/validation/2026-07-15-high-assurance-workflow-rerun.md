@@ -10,25 +10,28 @@
 
 Keep the high-assurance profile disabled. The fixed arm did not reach reviewer,
 external-review, merge, issue-2, or holdout evidence because the one-shot
-validation supervisor failed closed on its first PR-present forge snapshot.
+validation supervisor failed closed when a forge snapshot exceeded its
+five-second deadline.
 
 The named defect is that the validation supervisor cannot satisfy or prove its
-controlled evidence contract. First, `forge_snapshot` performs six sequential
-`gh` subprocess reads once a PR-link comment exists, while the approved
-supervisor gives the entire snapshot one five-second deadline. The live arm
-exceeded that deadline. A persisted read-only post-abort invocation of the same
-function took 7.355921 seconds while GitHub REST and GraphQL quotas remained
-above 97%. Second, final review proved that the at-activation supervisor did
-not reject or persist equal/non-empty workspace and mirror roots. The operator
-checked those roots before activation, but no immutable artifact preserved the
-result, so this report does not use that observation as proof. Third, code
-review showed that the at-activation Darwin shutdown path signaled and checked
-only each initial process group, so the committed code cannot prove
-session-wide shutdown. A reviewer separately reported reproducing a
-same-session sibling-group survivor, but no immutable reproduction artifact was
-saved; this report treats that observation as unverified and does not use it as
-proof. These defects do not prove the profile itself failed, but they prevent
-the required operational certification.
+controlled evidence contract. First, the approved supervisor gives an entire
+`forge_snapshot` one five-second deadline but records neither the active read
+stage nor a partial response when that deadline expires. The live arm exceeded
+the deadline, so the exact timeout path is unlocalized. A persisted read-only
+post-abort invocation of the same function later observed PR #3, completed its
+six sequential `gh` reads in 7.355921 seconds, and recorded GitHub REST and
+GraphQL quotas above 97%; that probe does not prove which path the live
+invocation reached. Second, final review proved that the at-activation
+supervisor did not reject or persist equal/non-empty workspace and mirror
+roots. The operator checked those roots before activation, but no immutable
+artifact preserved the result, so this report does not use that observation as
+proof. Third, code review showed that the at-activation Darwin shutdown path
+signaled and checked only each initial process group, so the committed code
+cannot prove session-wide shutdown. A reviewer separately reported reproducing
+a same-session sibling-group survivor, but no immutable reproduction artifact
+was saved; this report treats that observation as unverified and does not use
+it as proof. These defects do not prove the profile itself failed, but they
+prevent the required operational certification.
 
 ## Controlled protocol
 
@@ -99,7 +102,7 @@ post-run repair has been folded into the frozen files or the verdict.
 | 02:07:09.242 | Maker claim 1 started with the frozen workflow path. |
 | 02:10:11 | Maker opened PR #3 on head `71cb71a31ecc3fde684ddbc7d9cc848ead99b5fa`. |
 | 02:10:26 | Maker linked PR #3 from issue 1. |
-| 02:10:34.245 | The first PR-present forge snapshot exceeded five seconds; the supervisor failed closed. |
+| 02:10:34.245 | The next forge snapshot exceeded five seconds at an unrecorded read stage; the supervisor failed closed. |
 | 02:10:34.245 | SIGTERM followed 0.261 ms after detection; both workers exited 0 without SIGKILL. |
 | 02:10:39 | The already-running `build-test` completed successfully after the abort. |
 
@@ -119,11 +122,12 @@ unreviewed.
 
 The supervisor produced 46 successful forge snapshots. The last completed at
 02:10:26.386, but its issue-comments result did not yet include the same-second
-PR-link comment, so it did not discover the PR. The next snapshot
-followed the PR-present six-read path and breached the overall deadline. The
-required check, exact tuple, zero reviews, and zero review threads were
-confirmed only by a read-only GitHub reread after termination and are marked as
-post-abort evidence.
+PR-link comment, so it did not discover the PR. The next snapshot breached the
+overall deadline, but the frozen supervisor did not record its active read
+stage or a partial response; the evidence therefore does not establish whether
+that invocation discovered the PR. The required check, exact tuple, zero
+reviews, and zero review threads were confirmed only by a read-only GitHub
+reread after termination and are marked as post-abort evidence.
 
 Final review also found two gaps in the at-activation supervisor. It did not
 enforce or persist the activation gate requiring pairwise-distinct, empty
