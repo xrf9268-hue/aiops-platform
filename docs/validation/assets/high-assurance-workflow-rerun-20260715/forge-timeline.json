@@ -2,7 +2,7 @@
   "schema_version": 1,
   "captured_at": "2026-07-16T02:22:31.622744Z",
   "sources": [
-    "one-shot supervisor events.jsonl",
+    "sanitized supervisor event projection: supervisor-events.json",
     "live GitHub REST and GraphQL read after fail-closed termination"
   ],
   "repository": "zjlgdx/aiops-workflow-bench-high-20260715-1117-v1",

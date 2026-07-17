@@ -21,12 +21,14 @@ function took 7.355921 seconds while GitHub REST and GraphQL quotas remained
 above 97%. Second, final review proved that the at-activation supervisor did
 not reject or persist equal/non-empty workspace and mirror roots. The operator
 checked those roots before activation, but no immutable artifact preserved the
-result, so this report does not use that observation as proof. Third, on the
-actual Darwin host, the at-activation shutdown path signaled and checked only
-each initial process group; a reproducible same-session child in a sibling
-process group survived while shutdown was reported complete. These defects do
-not prove the profile itself failed, but they prevent the required operational
-certification.
+result, so this report does not use that observation as proof. Third, code
+review showed that the at-activation Darwin shutdown path signaled and checked
+only each initial process group, so the committed code cannot prove
+session-wide shutdown. A reviewer separately reported reproducing a
+same-session sibling-group survivor, but no immutable reproduction artifact was
+saved; this report treats that observation as unverified and does not use it as
+proof. These defects do not prove the profile itself failed, but they prevent
+the required operational certification.
 
 ## Controlled protocol
 
@@ -40,6 +42,7 @@ frozen before activation. The main evidence is:
 - [actual reviewer workflow](assets/high-assurance-workflow-rerun-20260715/reviewer-WORKFLOW.md)
 - [machine-readable summary](assets/high-assurance-workflow-rerun-20260715/summary.json)
 - [forge timeline](assets/high-assurance-workflow-rerun-20260715/forge-timeline.json)
+- [sanitized supervisor event evidence](assets/high-assurance-workflow-rerun-20260715/supervisor-events.json)
 - [post-abort read-only probe](assets/high-assurance-workflow-rerun-20260715/post-abort-probe.json)
 - [at-activation supervisor](assets/high-assurance-workflow-rerun-20260715/supervisor.py)
 - [at-activation supervisor tests](assets/high-assurance-workflow-rerun-20260715/supervisor_test.py)
@@ -125,14 +128,15 @@ post-abort evidence.
 Final review also found two gaps in the at-activation supervisor. It did not
 enforce or persist the activation gate requiring pairwise-distinct, empty
 maker/reviewer workspaces and mirror roots. On the actual Darwin host, it also
-signaled and checked only each initial process group, so a live same-session
-child in a sibling process group could survive while shutdown was reported as
-complete. Because the arm is complete, no remaining #1117 execution can benefit
-from after-the-fact hardening. This PR therefore preserves the exact defective
+signaled and checked only each initial process group, so the exact code cannot
+prove session-wide shutdown. The reported sibling-group survivor remains an
+unverified observation because its reproduction output was not persisted.
+Because the arm is complete, no remaining #1117 execution can benefit from
+after-the-fact hardening. This PR therefore preserves the exact defective
 artifacts instead of publishing a future-run supervisor. A corrected experiment
 belongs to a separate issue with a fresh protocol and repository; it must
-address all three evidence-contract failures and preregister any platform
-change before activation.
+address all three evidence-contract failures, preregister any platform change,
+and persist its shutdown proof before activation.
 
 ## Comparison with the valid #1089 standard arm
 
