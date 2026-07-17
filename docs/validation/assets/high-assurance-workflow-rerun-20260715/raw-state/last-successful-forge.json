@@ -1,0 +1,92 @@
+{
+  "event": "forge_state",
+  "issue": 1,
+  "recorded_at": "2026-07-16T02:10:26.386330Z",
+  "snapshot": {
+    "issue": {
+      "active_lock_reason": null,
+      "assignee": null,
+      "assignees": [],
+      "author_association": "OWNER",
+      "body": "# feat: persist and list todos\n\nImplement the first slice of the todo CLI.\n\n## Acceptance criteria\n\n- `TODO_DB=/path todo add \"Buy milk\"` persists a todo and prints `added 1`.\n- Titles are trimmed; an empty or whitespace-only title exits non-zero, prints\n  `title must not be empty` to stderr, and does not modify the database.\n- IDs start at 1 and increase monotonically.\n- `TODO_DB=/path todo list` prints one line per todo in ID order using exactly\n  `<id>\\t<status>\\t<title>`; new todos have status `active`.\n- State survives separate process invocations.\n- Add behavior-level tests. Use only the Go standard library.\n\n## Verification\n\n- `gofmt -w .`\n- `go test ./...`\n- `go vet ./...`\n",
+      "closed_at": null,
+      "closed_by": null,
+      "comments": 0,
+      "comments_url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1/comments",
+      "created_at": "2026-07-16T01:51:38Z",
+      "events_url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1/events",
+      "html_url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1",
+      "id": 4897924244,
+      "issue_dependencies_summary": {
+        "blocked_by": 0,
+        "blocking": 0,
+        "total_blocked_by": 0,
+        "total_blocking": 0
+      },
+      "labels": [
+        {
+          "color": "1D76DB",
+          "default": false,
+          "description": "Maker work is eligible",
+          "id": 11536512458,
+          "name": "aiops:todo",
+          "node_id": "LA_kwDOTZ4DF88AAAACr6E1yg",
+          "url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/labels/aiops:todo"
+        }
+      ],
+      "labels_url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1/labels{/name}",
+      "locked": false,
+      "milestone": null,
+      "node_id": "I_kwDOTZ4DF88AAAABI_BklA",
+      "number": 1,
+      "performed_via_github_app": null,
+      "pinned_comment": null,
+      "reactions": {
+        "+1": 0,
+        "-1": 0,
+        "confused": 0,
+        "eyes": 0,
+        "heart": 0,
+        "hooray": 0,
+        "laugh": 0,
+        "rocket": 0,
+        "total_count": 0,
+        "url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1/reactions"
+      },
+      "repository_url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1",
+      "state": "open",
+      "state_reason": null,
+      "sub_issues_summary": {
+        "completed": 0,
+        "percent_completed": 0,
+        "total": 0
+      },
+      "timeline_url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1/timeline",
+      "title": "feat: persist and list todos",
+      "updated_at": "2026-07-16T02:06:35Z",
+      "url": "https://api.github.com/repos/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1",
+      "user": {
+        "avatar_url": "https://avatars.githubusercontent.com/u/1209636?v=4",
+        "events_url": "https://api.github.com/users/zjlgdx/events{/privacy}",
+        "followers_url": "https://api.github.com/users/zjlgdx/followers",
+        "following_url": "https://api.github.com/users/zjlgdx/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zjlgdx/gists{/gist_id}",
+        "gravatar_id": "",
+        "html_url": "https://github.com/zjlgdx",
+        "id": 1209636,
+        "login": "zjlgdx",
+        "node_id": "MDQ6VXNlcjEyMDk2MzY=",
+        "organizations_url": "https://api.github.com/users/zjlgdx/orgs",
+        "received_events_url": "https://api.github.com/users/zjlgdx/received_events",
+        "repos_url": "https://api.github.com/users/zjlgdx/repos",
+        "site_admin": false,
+        "starred_url": "https://api.github.com/users/zjlgdx/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zjlgdx/subscriptions",
+        "type": "User",
+        "url": "https://api.github.com/users/zjlgdx",
+        "user_view_type": "public"
+      }
+    },
+    "issue_comments": []
+  }
+}

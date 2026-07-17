@@ -1,0 +1,40 @@
+{
+  "captured_at": "2026-07-16T02:22:31.622744Z",
+  "counts": {
+    "issue_comments": 1,
+    "pr_comments": 0,
+    "review_threads": 0,
+    "reviews": 0
+  },
+  "elapsed_seconds": 7.355921,
+  "function": "forge_snapshot",
+  "github_rate_limit": {
+    "graphql": {
+      "limit": 5000,
+      "remaining": 4868,
+      "reset": 1784168686,
+      "used": 132
+    },
+    "rest_core": {
+      "limit": 5000,
+      "remaining": 4881,
+      "reset": 1784169940,
+      "used": 119
+    }
+  },
+  "issue": 1,
+  "mode": "post-abort read-only reproduction",
+  "note": "This probe occurred after fail-closed termination and did not mutate the repository.",
+  "pr_number": 3,
+  "repository": "zjlgdx/aiops-workflow-bench-high-20260715-1117-v1",
+  "returned_keys": [
+    "issue",
+    "issue_comments",
+    "pr",
+    "pr_comments",
+    "review_threads",
+    "reviews"
+  ],
+  "schema_version": 1,
+  "supervisor_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c"
+}

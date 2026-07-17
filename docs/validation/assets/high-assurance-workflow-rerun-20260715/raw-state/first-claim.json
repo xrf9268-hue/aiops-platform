@@ -1,0 +1,107 @@
+[
+  {
+    "active_success_no_handoff": null,
+    "agent_default": "codex-app-server",
+    "agent_handoff_reconcile_stopped": null,
+    "blocked": [],
+    "budget_guardrails": {
+      "max_runtime_seconds_per_claim": 7200,
+      "max_tokens_per_claim": 20000000
+    },
+    "codex_totals": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "seconds_running": 0.026226792,
+      "total_tokens": 0
+    },
+    "completed": null,
+    "completed_session_usage": [],
+    "counts": {
+      "active_success_no_handoff": 0,
+      "active_success_no_handoff_total": 0,
+      "agent_handoff_reconcile_stopped": 0,
+      "agent_handoff_reconcile_stopped_total": 0,
+      "blocked": 0,
+      "completed": 0,
+      "completed_total": 0,
+      "operator_terminal_stops": 0,
+      "operator_terminal_stops_total": 0,
+      "reconcile_stopped_with_progress": 0,
+      "reconcile_stopped_with_progress_total": 0,
+      "retrying": 0,
+      "running": 1
+    },
+    "generated_at": "2026-07-16T02:07:09.268608Z",
+    "max_concurrent_agents": 1,
+    "operator_terminal_stops": [],
+    "poll_interval_ms": 30000,
+    "rate_limits": null,
+    "reconcile_stopped_with_progress": null,
+    "retrying": [],
+    "running": [
+      {
+        "issue_id": "4897924244",
+        "issue_identifier": "#1",
+        "issue_url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1",
+        "last_event": "",
+        "last_message": "",
+        "runtime_seconds": 0.026226792,
+        "session_id": "",
+        "started_at": "2026-07-16T10:07:09.242381+08:00",
+        "state": "aiops:todo",
+        "tokens": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0
+        },
+        "turn_count": 0,
+        "workflow_path": "/private/tmp/aiops-workflow-benchmark-20260715-1117/workflows/high-maker-WORKFLOW.md",
+        "workflow_source": "file",
+        "workspace_path": "/tmp/aiops-workflow-benchmark-20260715-1117/workspaces/maker/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/github_issue/_1"
+      }
+    ],
+    "version": "v0.1.16"
+  },
+  {
+    "active_success_no_handoff": null,
+    "agent_default": "codex-app-server",
+    "agent_handoff_reconcile_stopped": null,
+    "blocked": [],
+    "budget_guardrails": {
+      "max_runtime_seconds_per_claim": 7200,
+      "max_tokens_per_claim": 12000000
+    },
+    "codex_totals": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "seconds_running": 0,
+      "total_tokens": 0
+    },
+    "completed": null,
+    "completed_session_usage": [],
+    "counts": {
+      "active_success_no_handoff": 0,
+      "active_success_no_handoff_total": 0,
+      "agent_handoff_reconcile_stopped": 0,
+      "agent_handoff_reconcile_stopped_total": 0,
+      "blocked": 0,
+      "completed": 0,
+      "completed_total": 0,
+      "operator_terminal_stops": 0,
+      "operator_terminal_stops_total": 0,
+      "reconcile_stopped_with_progress": 0,
+      "reconcile_stopped_with_progress_total": 0,
+      "retrying": 0,
+      "running": 0
+    },
+    "generated_at": "2026-07-16T02:07:09.270264Z",
+    "max_concurrent_agents": 1,
+    "operator_terminal_stops": [],
+    "poll_interval_ms": 30000,
+    "rate_limits": null,
+    "reconcile_stopped_with_progress": null,
+    "retrying": [],
+    "running": [],
+    "version": "v0.1.16"
+  }
+]
