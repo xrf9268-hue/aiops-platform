@@ -3,8 +3,8 @@ package runner
 // codex_app_server_turn_test.go holds characterization tests that drive
 // (*appServerClient).awaitTurnCompletion directly over an in-memory JSON-RPC
 // stream, without spawning a real `codex app-server` subprocess. They pin the
-// turn loop's input→(returned error, recorded runtime events, continuation
-// signal) behavior at the exact function boundary before #499 decomposes the
+// turn loop's input→(returned error, recorded runtime events) behavior at the
+// exact function boundary before #499 decomposes the
 // 78-cognitive-complexity loop into per-concern handlers; the assertions must
 // hold identically before and after that refactor.
 //
@@ -66,31 +66,13 @@ func runtimeEventNames(c *appServerClient) []string {
 
 func TestAwaitTurnCompletion_TurnCompletedSuccess(t *testing.T) {
 	c, _ := newTurnLoopClient(t, []string{
-		`{"method":"turn/completed","params":{"lastAssistantMessage":"all done","continue":false}}`,
+		`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"completed"}}}`,
 	})
 	if err := c.awaitTurnCompletion(context.Background()); err != nil {
 		t.Fatalf("awaitTurnCompletion() = %v; want nil on turn/completed success", err)
 	}
-	if got, want := c.summary(), "all done"; got != want {
-		t.Errorf("summary() = %q; want %q", got, want)
-	}
-	if c.continueRun {
-		t.Errorf("continueRun = true; want false (params.continue=false)")
-	}
 	if got, want := runtimeEventNames(c), []string{task.EventTurnCompleted}; !slices.Equal(got, want) {
 		t.Errorf("runtime events = %v; want %v", got, want)
-	}
-}
-
-func TestAwaitTurnCompletion_TurnCompletedSetsContinueRun(t *testing.T) {
-	c, _ := newTurnLoopClient(t, []string{
-		`{"method":"turn/completed","params":{"continue":true,"lastAssistantMessage":"keep going"}}`,
-	})
-	if err := c.awaitTurnCompletion(context.Background()); err != nil {
-		t.Fatalf("awaitTurnCompletion() = %v; want nil", err)
-	}
-	if !c.continueRun {
-		t.Errorf("continueRun = false; want true (params.continue=true)")
 	}
 }
 

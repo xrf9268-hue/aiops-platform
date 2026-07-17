@@ -336,8 +336,8 @@ func TestRuntimeDispatcherIssueStateRefresherPassesIssueIdentifierFallback(t *te
 
 // TestRuntimeDispatcherConfigForSnapshotReturnsNilWithoutRefresher pins the
 // fallback: without SetIssueStateRefresher the dispatcher leaves
-// IssueStateRefresher unset so RunTask keeps the legacy continueRun-only
-// path (e.g. tests, mock runners).
+// IssueStateRefresher unset so RunTask uses the runner's single-turn fallback
+// (e.g. tests, mock runners).
 func TestRuntimeDispatcherConfigForSnapshotReturnsNilWithoutRefresher(t *testing.T) {
 	d := &RuntimeDispatcher{baseConfig: worker.Config{}}
 	snap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
@@ -470,7 +470,7 @@ func TestRuntimePollerWiresRefresherOntoProvidedDispatcher(t *testing.T) {
 // TestRuntimeDispatcherConfigForSnapshotEmptyActiveStatesDisablesFactory
 // guards a foot-gun: if active_states is empty the refresher would mark
 // every state as inactive and kill workers after the first turn. The
-// factory must return nil so the runner falls back to continueRun.
+// factory must return nil so the runner uses its single-turn fallback.
 func TestRuntimeDispatcherConfigForSnapshotEmptyActiveStatesDisablesFactory(t *testing.T) {
 	d := &RuntimeDispatcher{baseConfig: worker.Config{}}
 	d.SetIssueStateRefresher(&stubRefresher{states: map[string]string{"issue-1": "In Progress"}})

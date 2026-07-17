@@ -211,9 +211,6 @@ func (c *appServerClient) handleNotification(msg map[string]any) {
 		return
 	}
 	params, _ := msg["params"].(map[string]any)
-	if v, ok := params["continue"].(bool); ok {
-		c.continueRun = v
-	}
 	for _, key := range []string{"lastAssistantMessage", "last_message", "message", "summary"} {
 		if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
 			c.lastMessage = strings.TrimSpace(v)

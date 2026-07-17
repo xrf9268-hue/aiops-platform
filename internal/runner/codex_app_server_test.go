@@ -787,7 +787,7 @@ while IFS= read -r line; do
             ;;
         *'"method":"turn/start"'*)
             printf '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}\n'
-            printf '{"method":"turn/completed","params":{"turn":{"status":"completed"},"continue":false}}\n'
+            printf '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"completed"}}}\n'
             exit 0
             ;;
     esac
@@ -1016,15 +1016,16 @@ for line in sys.stdin:
     elif method == 'turn/start':
         turns += 1
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
-        if turns == 1:
-            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'continue', 'continue': True}}), flush=True)
-        else:
-            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done'}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-%d' % turns, 'items': [], 'status': 'completed'}}}), flush=True)
+        if turns == 2:
             break
 `)
 	wd := codexWorkdir(t, "session once")
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 2
+	in.RefreshIssueState = func(context.Context) (IssueStateSnapshot, error) {
+		return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
+	}
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
 	if err != nil {
@@ -1250,7 +1251,7 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerHonorsMaxTurnsForContinuationRequests(t *testing.T) {
+func TestCodexAppServerRunnerStopsAfterOneTurnWithoutIssueRefresher(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
 turns=0
@@ -1265,11 +1266,7 @@ for line in sys.stdin:
     elif msg.get('method') == 'turn/start':
         turns += 1
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
-        if turns < 3:
-            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'needs another turn', 'continue': True}}), flush=True)
-        else:
-            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done after turn 3'}}), flush=True)
-            break
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-%d' % turns, 'items': [], 'status': 'completed'}}}), flush=True)
     elif msg.get('method') == 'initialized':
         pass
 `)
@@ -1277,12 +1274,16 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 3
 
-	res, err := runCodexAppServerForTest(t, in)
+	_, err := runCodexAppServerForTest(t, in)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Summary != "done after turn 3" {
-		t.Fatalf("Summary = %q, want final third-turn summary", res.Summary)
+	stdinLog, err := os.ReadFile(os.Getenv("CODEX_STDIN_LOG"))
+	if err != nil {
+		t.Fatalf("read CODEX_STDIN_LOG: %v", err)
+	}
+	if got := strings.Count(string(stdinLog), `"method":"turn/start"`); got != 1 {
+		t.Fatalf("turn/start requests sent = %d, want single-turn fallback without refresher; stdin=\n%s", got, stdinLog)
 	}
 }
 
@@ -1301,7 +1302,7 @@ for line in sys.stdin:
     elif msg.get('method') == 'turn/start':
         turns += 1
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
-        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-%d' % turns, 'items': [], 'status': 'completed'}}}), flush=True)
     elif msg.get('method') == 'initialized':
         pass
 `)
@@ -1309,13 +1310,18 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 8
 	in.CleanTurnBudget = 2
+	var refreshCalls int
+	in.RefreshIssueState = func(context.Context) (IssueStateSnapshot, error) {
+		refreshCalls++
+		return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
+	}
 
-	res, err := runCodexAppServerForTest(t, in)
+	_, err := runCodexAppServerForTest(t, in)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Summary != "turn 2 done" {
-		t.Fatalf("Summary = %q; want last budgeted clean turn", res.Summary)
+	if refreshCalls != 2 {
+		t.Fatalf("RefreshIssueState calls = %d, want 2 (one after each budgeted turn)", refreshCalls)
 	}
 	stdinLog, err := os.ReadFile(os.Getenv("CODEX_STDIN_LOG"))
 	if err != nil {
@@ -1326,7 +1332,7 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerErrorsAtMaxTurnsWithoutCleanTurnBudget(t *testing.T) {
+func TestCodexAppServerRunnerStopsCleanlyAtMaxTurns(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
 turns=0
@@ -1341,17 +1347,32 @@ for line in sys.stdin:
     elif msg.get('method') == 'turn/start':
         turns += 1
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
-        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-%d' % turns, 'items': [], 'status': 'completed'}}}), flush=True)
     elif msg.get('method') == 'initialized':
         pass
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 2
+	var refreshCalls int
+	in.RefreshIssueState = func(context.Context) (IssueStateSnapshot, error) {
+		refreshCalls++
+		return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
+	}
 
 	_, err := runCodexAppServerForTest(t, in)
-	if err == nil || !strings.Contains(err.Error(), "codex app-server exceeded agent.max_turns=2") {
-		t.Fatalf("Run error = %v; want native agent.max_turns=2 exhaustion", err)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if refreshCalls != 2 {
+		t.Fatalf("RefreshIssueState calls = %d, want 2 (one after each completed turn)", refreshCalls)
+	}
+	stdinLog, err := os.ReadFile(os.Getenv("CODEX_STDIN_LOG"))
+	if err != nil {
+		t.Fatalf("read CODEX_STDIN_LOG: %v", err)
+	}
+	if got := strings.Count(string(stdinLog), `"method":"turn/start"`); got != 2 {
+		t.Fatalf("turn/start requests sent = %d, want 2 from agent.max_turns; stdin=\n%s", got, stdinLog)
 	}
 }
 
@@ -1370,7 +1391,7 @@ for line in sys.stdin:
     elif msg.get('method') == 'turn/start':
         turns += 1
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
-        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-%d' % turns, 'items': [], 'status': 'completed'}}}), flush=True)
     elif msg.get('method') == 'initialized':
         pass
 `)
@@ -1378,10 +1399,18 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 2
 	in.CleanTurnBudget = 5
+	var refreshCalls int
+	in.RefreshIssueState = func(context.Context) (IssueStateSnapshot, error) {
+		refreshCalls++
+		return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
+	}
 
 	_, err := runCodexAppServerForTest(t, in)
-	if err == nil || !strings.Contains(err.Error(), "codex app-server exceeded agent.max_turns=2") {
-		t.Fatalf("Run error = %v; want native agent.max_turns=2 exhaustion despite larger clean budget", err)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if refreshCalls != 2 {
+		t.Fatalf("RefreshIssueState calls = %d, want 2 (CleanTurnBudget must not expand agent.max_turns)", refreshCalls)
 	}
 	stdinLog, err := os.ReadFile(os.Getenv("CODEX_STDIN_LOG"))
 	if err != nil {
@@ -1393,11 +1422,9 @@ for line in sys.stdin:
 }
 
 // TestCodexAppServerRunnerExitsWhenIssueLeavesActiveStateBetweenTurns pins
-// SPEC §16.5: after each turn the runner consults the tracker and exits
-// cleanly when the linked issue is no longer active, even when the agent
-// is requesting another turn via params.continue=true. Without this gate
-// the worker would burn the full agent.max_turns budget before the
-// orchestrator's next per-tick reconcile noticed the operator cancel.
+// SPEC §16.5: after each turn the runner consults the tracker, continues on
+// the same live thread while the issue stays active, and exits cleanly once
+// the issue is no longer active.
 func TestCodexAppServerRunnerExitsWhenIssueLeavesActiveStateBetweenTurns(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
@@ -1413,7 +1440,7 @@ for line in sys.stdin:
     elif msg.get('method') == 'turn/start':
         turns += 1
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
-        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-%d' % turns, 'items': [], 'status': 'completed'}}}), flush=True)
     elif msg.get('method') == 'initialized':
         pass
 `)
@@ -1424,11 +1451,9 @@ for line in sys.stdin:
 	var refreshCalls int
 	in.RefreshIssueState = func(ctx context.Context) (IssueStateSnapshot, error) {
 		refreshCalls++
-		// First turn: issue is still active, runner should request
-		// another turn. Second turn: operator cancelled (issue moved to
-		// "Done"); refresher reports inactive and the runner must exit
-		// before sending the third turn/start even though the agent's
-		// continue=true would otherwise keep the loop running.
+		// First turn: issue is still active, so the runner should request
+		// another turn. Second turn: the operator moved the issue to Done,
+		// so the runner must exit before sending a third turn/start.
 		if refreshCalls < 2 {
 			return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
 		}
@@ -1446,9 +1471,6 @@ for line in sys.stdin:
 	if len(completed) != 2 {
 		t.Fatalf("turn_completed events = %d, want exactly 2 (refresher cut off the agent's third turn); events=%#v", len(completed), res.RuntimeEvents)
 	}
-	if res.Summary != "turn 2 done" {
-		t.Fatalf("Summary = %q, want last completed turn's message", res.Summary)
-	}
 	if res.IssueExitState == nil || res.IssueExitState.State != "Done" || !res.IssueExitState.Terminal {
 		t.Fatalf("IssueExitState = %+v, want terminal Done snapshot when SPEC §16.5 refresher stops the run", res.IssueExitState)
 	}
@@ -1462,6 +1484,12 @@ for line in sys.stdin:
 	}
 	if got := strings.Count(string(stdinLog), `"method":"turn/start"`); got != 2 {
 		t.Fatalf("turn/start requests sent = %d, want 2 (runner should not send a third turn after refresher returns inactive); stdin=\n%s", got, stdinLog)
+	}
+	if got := strings.Count(string(stdinLog), `"method":"thread/start"`); got != 1 {
+		t.Fatalf("thread/start requests sent = %d, want 1 for the whole multi-turn session; stdin=\n%s", got, stdinLog)
+	}
+	if got := strings.Count(string(stdinLog), `"threadId":"thread-1"`); got != 2 {
+		t.Fatalf("turn/start requests using thread-1 = %d, want 2; stdin=\n%s", got, stdinLog)
 	}
 }
 
@@ -1481,7 +1509,7 @@ for line in sys.stdin:
         print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
     elif msg.get('method') == 'turn/start':
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'mid-run', 'continue': True}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-1', 'items': [], 'status': 'completed'}}}), flush=True)
     elif msg.get('method') == 'initialized':
         pass
 `)
@@ -1998,7 +2026,7 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerSendsContinuationInputAfterContinueRequest(t *testing.T) {
+func TestCodexAppServerRunnerSendsContinuationInputAfterActiveRefresh(t *testing.T) {
 	binDir := codexAppServerStubScript(t, `
 import json
 turns=0
@@ -2013,10 +2041,8 @@ for line in sys.stdin:
     elif msg.get('method') == 'turn/start':
         turns += 1
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
-        if turns == 1:
-            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'needs follow-up', 'continue': True}}), flush=True)
-        else:
-            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done'}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-%d' % turns, 'items': [], 'status': 'completed'}}}), flush=True)
+        if turns == 2:
             break
     elif msg.get('method') == 'initialized':
         pass
@@ -2024,6 +2050,9 @@ for line in sys.stdin:
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 2
+	in.RefreshIssueState = func(context.Context) (IssueStateSnapshot, error) {
+		return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
+	}
 
 	_, err := (CodexAppServerRunner{}).Run(context.Background(), in)
 	if err != nil {
