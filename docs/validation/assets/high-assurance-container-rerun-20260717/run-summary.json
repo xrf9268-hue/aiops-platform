@@ -1,0 +1,141 @@
+{
+  "allowed_verdict": "keep disabled pending a named defect",
+  "container_stop_error": null,
+  "container_stop_proof": [
+    {
+      "container_id": "05947691c3070c6b2367d82d267faf7f890fac034e931c4cb3f9006d6dd4dd62",
+      "docker_wait_exit": 0,
+      "inspect_exit_code": 0,
+      "pid": 0,
+      "proof_boundary": "exact container ID",
+      "role": "maker",
+      "running": false,
+      "terminal_at": "2026-07-17T04:34:53.136099Z"
+    },
+    {
+      "container_id": "d412df119d329fbb0eae49786e492e254ce6ee514be5c21bd2630603d764dc9c",
+      "docker_wait_exit": 0,
+      "inspect_exit_code": 0,
+      "pid": 0,
+      "proof_boundary": "exact container ID",
+      "role": "reviewer",
+      "running": false,
+      "terminal_at": "2026-07-17T04:34:53.180190Z"
+    }
+  ],
+  "issues": [],
+  "known_unmeasured": [
+    "external GitHub Codex review tokens",
+    "any external reviewer tokens",
+    "otherwise unreported nested or subagent tokens"
+  ],
+  "named_defect": {
+    "issue_number": 1,
+    "limit": 4,
+    "observed": {
+      "claims": 4,
+      "retrying": 1
+    },
+    "reason": "claim_five_pending",
+    "usage": {
+      "accounting_matches": true,
+      "active_issue_numbers": [
+        1
+      ],
+      "claim_count": 4,
+      "claim_rows": [
+        {
+          "agent_model": "gpt-5.6-sol",
+          "agent_provider": "codex-app-server",
+          "completed_at": "2026-07-17T04:18:41.645011254Z",
+          "issue_id": "4907676010",
+          "issue_identifier": "#1",
+          "issue_url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260717-1128-v1/issues/1",
+          "outcome": "completed",
+          "role": "maker",
+          "runtime_seconds": 255.3790562,
+          "session_id": "019f6e48-8869-74b2-a895-8a865d53c83c-019f6e48-88b6-7fc2-a606-7eaeae13afa2",
+          "source": "completed_session_usage",
+          "state": "aiops:todo",
+          "tokens": {
+            "input_tokens": 419166,
+            "output_tokens": 8572,
+            "total_tokens": 427738
+          },
+          "workflow_path": "/app/WORKFLOW.md",
+          "workflow_source": "file"
+        },
+        {
+          "agent_model": "gpt-5.6-sol",
+          "agent_provider": "codex-app-server",
+          "completed_at": "2026-07-17T04:29:44.038649339Z",
+          "issue_id": "4907676010",
+          "issue_identifier": "#1",
+          "issue_url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260717-1128-v1/issues/1",
+          "outcome": "completed",
+          "role": "maker",
+          "runtime_seconds": 182.590403126,
+          "session_id": "019f6e53-b934-75a3-9972-6300ee6d0a08-019f6e53-b9ab-7c52-ac77-3ad6fa1b800e",
+          "source": "completed_session_usage",
+          "state": "aiops:rework",
+          "tokens": {
+            "input_tokens": 393851,
+            "output_tokens": 5675,
+            "total_tokens": 399526
+          },
+          "workflow_path": "/app/WORKFLOW.md",
+          "workflow_source": "file"
+        },
+        {
+          "agent_model": "gpt-5.6-sol",
+          "agent_provider": "codex-app-server",
+          "completed_at": "2026-07-17T04:26:26.417437136Z",
+          "issue_id": "4907676010",
+          "issue_identifier": "#1",
+          "issue_url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260717-1128-v1/issues/1",
+          "outcome": "reconcile_ineligible",
+          "role": "reviewer",
+          "runtime_seconds": 432.054136155,
+          "session_id": "019f6e4c-f23c-7c92-8e91-72961a6363ab-019f6e4c-f28f-7820-81b0-b759bdf8aae5",
+          "source": "completed_session_usage",
+          "state": "aiops:rework",
+          "tokens": {
+            "input_tokens": 323533,
+            "output_tokens": 16407,
+            "total_tokens": 339940
+          },
+          "workflow_path": "/app/WORKFLOW.md",
+          "workflow_source": "file"
+        },
+        {
+          "agent_model": "gpt-5.6-sol",
+          "agent_provider": "codex-app-server",
+          "completed_at": "2026-07-17T04:34:52.449588093Z",
+          "issue_id": "4907676010",
+          "issue_identifier": "#1",
+          "issue_url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260717-1128-v1/issues/1",
+          "outcome": "active_success_no_handoff",
+          "role": "reviewer",
+          "runtime_seconds": 287.00900509,
+          "session_id": "019f6e56-c3ab-70f0-beed-48109e4704a2-019f6e56-c4ba-72a1-9c3c-eb6dafc6ec48",
+          "source": "completed_session_usage",
+          "state": "aiops:human-review",
+          "tokens": {
+            "input_tokens": 370176,
+            "output_tokens": 10350,
+            "total_tokens": 380526
+          },
+          "workflow_path": "/app/WORKFLOW.md",
+          "workflow_source": "file"
+        }
+      ],
+      "issue_attributed_tokens": 1547730,
+      "issue_number": 1,
+      "retrying_count": 1,
+      "token_counter_regressions": [],
+      "worker_total_delta": 1547730
+    },
+    "wall_seconds": 1258.0558740829874
+  },
+  "outcome": "aborted"
+}

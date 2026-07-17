@@ -1,0 +1,73 @@
+{
+  "observed_at": "2026-07-17T13:54:11Z",
+  "mode": "read-only GitHub probe after terminal abort",
+  "terminal_run": {
+    "aborted_at": "2026-07-17T04:34:52.735570Z",
+    "reason": "claim_five_pending",
+    "claims": 4,
+    "retrying": 1,
+    "allowed_verdict": "keep disabled pending a named defect"
+  },
+  "tuple": {
+    "head_ref_oid": "32b7cf713eb1ee93ec908efee506010b841dfd71",
+    "base_ref_oid": "03865606188dbda2161cc1c98c40f454312fcdd4",
+    "base_ref_name": "main"
+  },
+  "local_checkpoint": {
+    "review_id": 4719359428,
+    "state": "COMMENTED",
+    "submitted_at": "2026-07-17T04:34:18Z",
+    "local_rubric": "PASS"
+  },
+  "trigger": {
+    "comment_id": 4999008222,
+    "created_at": "2026-07-17T04:34:34Z",
+    "body": "@codex review"
+  },
+  "reliable_external_review": {
+    "review_id": 4719367558,
+    "bot_login": "chatgpt-codex-connector[bot]",
+    "bot_numeric_id": 199175422,
+    "state": "COMMENTED",
+    "commit_id": "32b7cf713eb1ee93ec908efee506010b841dfd71",
+    "submitted_at": "2026-07-17T04:36:54Z",
+    "trigger_to_review_seconds": 140,
+    "abort_to_review_seconds": 121.26443
+  },
+  "review_thread": {
+    "thread_id": "PRRT_kwDOTbGwbM6Rpp61",
+    "comment_id": 3600397076,
+    "created_at": "2026-07-17T04:36:55Z",
+    "path": "main.go",
+    "line": 47,
+    "is_resolved": false,
+    "is_outdated": false,
+    "summary": "P1: concurrent add processes can load the same snapshot and lose updates"
+  },
+  "live_github_state": {
+    "pr": {
+      "number": 3,
+      "state": "OPEN",
+      "merge_state_status": "BLOCKED",
+      "review_decision": "CHANGES_REQUESTED",
+      "merged_at": null,
+      "required_check": {
+        "name": "build-test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "completed_at": "2026-07-17T04:29:16Z"
+      }
+    },
+    "issue_1": {
+      "state": "OPEN",
+      "labels": [
+        "aiops:human-review"
+      ]
+    },
+    "issue_2": {
+      "state": "OPEN",
+      "labels": []
+    }
+  },
+  "interpretation": "The late signal is auditable but cannot repair, resume, or change the terminal run. Its unresolved finding confirms that no approval or merge was safe at abort."
+}
