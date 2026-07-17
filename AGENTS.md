@@ -17,7 +17,7 @@ change a rule here, update its rationale entry there too.
 
 - [What this project is](#what-this-project-is) — scope, the scheduler/runner boundary, transitional reverts
 - [SPEC alignment is a hard requirement](#spec-alignment-is-a-hard-requirement) — the authoritative sources
-- [Harness engineering principles](#harness-engineering-principles) — how to evaluate components (1–7)
+- [Harness engineering principles](#harness-engineering-principles) — how to evaluate components (1–8)
 - [Cross-cutting checklist](#cross-cutting-checklist-when-porting-from-the-elixir-reference) — Elixir-port failure classes + rules for agents
 - [Layout](#layout) · [Build, test, lint](#build-test-lint)
 - [Clean code](#clean-code) — per-PR rules (1–11)
@@ -191,6 +191,14 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
    act; don't hand the operator a multiple-choice menu (usually a sign the
    research that would rule out "keep" wasn't finished). Reserve operator
    choices for genuine scope/intent/safety forks SPEC leaves open.
+   ([provenance](docs/engineering-rules-rationale.md#harness-principles))
+8. **Run the deletion test before expanding scope.** Before materially
+   expanding an implementation, reread the live acceptance criteria. If
+   deleting the proposed capability preserves required evidence and safety for
+   every remaining in-scope execution, do not add it here; keep the smallest
+   safe supported surface, failing closed before side effects where needed.
+   Move optional expansion to a follow-up issue; broaden the current issue only
+   with explicit operator approval.
    ([provenance](docs/engineering-rules-rationale.md#harness-principles))
 
 ## Cross-cutting checklist when porting from the Elixir reference
