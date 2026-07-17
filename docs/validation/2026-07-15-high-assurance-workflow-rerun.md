@@ -41,7 +41,6 @@ frozen before activation. The main evidence is:
 - [machine-readable summary](assets/high-assurance-workflow-rerun-20260715/summary.json)
 - [forge timeline](assets/high-assurance-workflow-rerun-20260715/forge-timeline.json)
 - [post-abort read-only probe](assets/high-assurance-workflow-rerun-20260715/post-abort-probe.json)
-- [at-activation artifact manifest](assets/high-assurance-workflow-rerun-20260715/at-activation-artifacts.json)
 - [at-activation supervisor](assets/high-assurance-workflow-rerun-20260715/supervisor.py)
 - [at-activation supervisor tests](assets/high-assurance-workflow-rerun-20260715/supervisor_test.py)
 - [state manifest](assets/high-assurance-workflow-rerun-20260715/raw-state-manifest.json)
@@ -74,13 +73,14 @@ GitHub's user-owned-repository permission model before activation, so the run
 restored #1089's `zjlgdx` setup/reviewer/operator identity without granting
 `bytevane` push permission.
 
-The protocol header distinguishes its initial preregistration from that
-post-repository, pre-activation permission amendment. The committed protocol,
+Protocol item 2 records the post-repository, pre-activation permission
+amendment. Its opening chronology still describes only the initial
+preregistration and was not updated after that amendment; this report does not
+treat the opening as proof of the later sequence. The committed protocol,
 supervisor, and supervisor tests are byte-for-byte the files frozen before
-activation; their SHA-256 values are recorded in
-`at-activation-artifacts.json` and `summary.json`. They are historical evidence
-with known defects and are not approved for reuse. No later fixes are folded
-into them.
+activation; their SHA-256 values are recorded directly in `summary.json`. They
+are historical evidence with known defects and are not approved for reuse. No
+later fixes are folded into them.
 
 ## Observed run
 
@@ -131,8 +131,8 @@ complete. Because the arm is complete, no remaining #1117 execution can benefit
 from after-the-fact hardening. This PR therefore preserves the exact defective
 artifacts instead of publishing a future-run supervisor. A corrected experiment
 belongs to a separate issue with a fresh protocol and repository; it must
-address all three named defects and preregister any platform change before
-activation.
+address all three evidence-contract failures and preregister any platform
+change before activation.
 
 ## Comparison with the valid #1089 standard arm
 
