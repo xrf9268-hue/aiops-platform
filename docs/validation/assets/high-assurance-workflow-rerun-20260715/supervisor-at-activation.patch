@@ -79,9 +79,7 @@
 -
 -
 -@dataclasses.dataclass(frozen=True)
-@@ -147,126 +73,0 @@
--
--
+@@ -149,126 +75,0 @@
 -@dataclasses.dataclass
 -class TerminationAttempt:
 -    processes: list[subprocess.Popen[str]]
@@ -206,7 +204,11 @@
 -
 -    def exit_codes(self) -> dict[str, int | None]:
 -        return {str(process.pid): self.poll(process) for process in self.processes}
-@@ -398,60 +198,0 @@
+-
+-
+@@ -396,34 +196,0 @@
+-
+-
 -def workflow_workspace_root(workflow: Path) -> Path:
 -    lines = workflow.read_text(encoding="utf-8").splitlines()
 -    if not lines or lines[0] != "---":
@@ -239,8 +241,7 @@
 -    if not root.is_absolute():
 -        raise ValueError(f"workflow workspace.root must be absolute: {root}")
 -    return root.resolve()
--
--
+@@ -432,26 +198,0 @@
 -def validate_fresh_directories(
 -    directories: dict[str, Path],
 -) -> dict[str, dict[str, Any]]:
@@ -270,7 +271,9 @@
 @@ -473 +214 @@
 -            raise CounterRegressionError(
 +            raise ValueError(
-@@ -683,168 +424 @@
+@@ -681,56 +421,0 @@
+-
+-
 -def parse_proc_stat(stat: str) -> tuple[int, str, int, int, int, int]:
 -    fields = stat[stat.rindex(")") + 1 :].split()
 -    return (
@@ -325,6 +328,16 @@
 -            ):
 -                return False
 -    return found_proc_mount
+@@ -739,123 +424 @@
+-def require_session_shutdown_support() -> None:
+-    if not sys.platform.startswith("linux"):
+-        raise RuntimeError("safe worker-session shutdown requires Linux")
+-    if not callable(getattr(os, "pidfd_open", None)) or not callable(
+-        getattr(signal, "pidfd_send_signal", None)
+-    ):
+-        raise RuntimeError("safe worker-session shutdown requires Linux pidfd support")
+-    if not proc_visibility_complete():
+-        raise RuntimeError("safe worker-session shutdown requires visible /proc")
 -
 -
 -def linux_process_group_snapshot(
@@ -440,13 +453,13 @@
 -
 -def process_group_exists(pgid: int) -> bool:
 +def process_group_alive(pgid: int) -> bool:
-@@ -856,5 +429,0 @@
+@@ -867,5 +429,0 @@
 -        if sys.platform == "darwin":
 -            try:
 -                os.getpgid(pgid)
 -            except ProcessLookupError:
 -                return False
-@@ -865,55 +433,0 @@
+@@ -876,55 +433,0 @@
 -def process_group_alive(pgid: int) -> bool:
 -    if sys.platform.startswith("linux"):
 -        live_member = linux_process_group_has_live_member(pgid)
@@ -502,7 +515,7 @@
 -            signal.signal(restore_signal, handler)
 -
 -
-@@ -930,56 +444,53 @@
+@@ -941,56 +444,53 @@
 -    attempt = TerminationAttempt(raw, event_log)
 -
 -    with shutdown_signal_guard():
@@ -612,11 +625,11 @@
 +            "exit_codes": {str(process.pid): process.poll() for process in raw},
 +        },
 +    )
-@@ -1208,0 +720 @@
+@@ -1219,0 +720 @@
 +        self.raw_dir = self.run_root / "evidence" / "raw"
-@@ -1211 +722,0 @@
+@@ -1222 +722,0 @@
 -        self.shutdown_completed = False
-@@ -1336,13 +846,0 @@
+@@ -1347,13 +846,0 @@
 -    def verify_run_directories(self) -> None:
 -        directories: dict[str, Path] = {}
 -        for spec in self.specs():
@@ -630,9 +643,9 @@
 -            {"event": "preflight_directories", "directories": manifest},
 -        )
 -
-@@ -1374 +871,0 @@
+@@ -1385 +871,0 @@
 -            process: subprocess.Popen[str] | None = None
-@@ -1376,58 +873,10 @@
+@@ -1387,58 +873,10 @@
 -                with defer_spawn_signals() as pending_signals:
 -                    process = subprocess.Popen(
 -                        [worker_bin, "--port", str(spec.port), str(spec.workflow)],
@@ -701,22 +714,22 @@
 +                )
 +            except BaseException:
 +                handle.close()
-@@ -1434,0 +884 @@
+@@ -1445,0 +884 @@
 +            self.workers.append(WorkerProcess(spec, process, handle))
-@@ -1453,0 +904,4 @@
+@@ -1464,0 +904,4 @@
 +            if worker.process.poll() is not None:
 +                raise RuntimeError(
 +                    f"{worker.spec.role} worker exited unexpectedly with {worker.process.returncode}"
 +                )
-@@ -1466,0 +921,4 @@
+@@ -1477,0 +921,4 @@
 +                    if worker.process.poll() is not None:
 +                        raise RuntimeError(
 +                            f"{worker.spec.role} worker exited before readiness"
 +                        )
-@@ -1644 +1102 @@
+@@ -1655 +1102 @@
 -                        raise CounterRegressionError(
 +                        raise ValueError(
-@@ -1661,4 +1119,5 @@
+@@ -1672,4 +1119,5 @@
 -            except CounterRegressionError as exc:
 -                breach = LimitBreach("counter_regression", 1, 0)
 -                self.abort(
@@ -726,12 +739,12 @@
 +                    "counter_regression"
 +                    if "regressed" in str(exc)
 +                    else "token_accounting_failed"
-@@ -1666,3 +1125 @@
+@@ -1677,3 +1125 @@
 -                return False, states
 -            except ValueError as exc:
 -                breach = LimitBreach("token_accounting_failed", 1, 0)
 +                breach = LimitBreach(reason, 1, 0)
-@@ -1733,28 +1189,0 @@
+@@ -1744,28 +1189,0 @@
 -    def stop_workers(self, event: dict[str, Any]) -> None:
 -        termination_error: BaseException | None = None
 -        close_errors: list[BaseException] = []
@@ -760,7 +773,7 @@
 -        if close_errors:
 -            raise WorkerLogCloseError(close_errors) from close_errors[0]
 -
-@@ -1779 +1208,8 @@
+@@ -1790 +1208,8 @@
 -        self.stop_workers(event)
 +        terminate_workers(
 +            self.workers,
@@ -770,9 +783,9 @@
 +        )
 +        for worker in self.workers:
 +            worker.log_handle.close()
-@@ -1784 +1219,0 @@
+@@ -1795 +1219,0 @@
 -        self.verify_run_directories()
-@@ -1794 +1229,8 @@
+@@ -1805 +1229,8 @@
 -            self.stop_workers({"event": "arm_completed", "issues": self.args.issues})
 +            terminate_workers(
 +                self.workers,
@@ -782,7 +795,7 @@
 +            )
 +            for worker in self.workers:
 +                worker.log_handle.close()
-@@ -1796,20 +1238,14 @@
+@@ -1807,20 +1238,14 @@
 -        except BaseException as exc:
 -            cleanup_error: BaseException | None = None
 -            if self.workers and not self.shutdown_completed:
@@ -817,7 +830,8 @@
 +                )
 +                for worker in self.workers:
 +                    worker.log_handle.close()
-@@ -1862,2 +1298 @@
+@@ -1873,3 +1298 @@
+-        require_session_shutdown_support()
 -        with termination_signal_handlers():
 -            return Supervisor(args).run()
 +        return Supervisor(args).run()

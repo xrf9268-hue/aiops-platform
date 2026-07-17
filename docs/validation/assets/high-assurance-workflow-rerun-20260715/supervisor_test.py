@@ -936,6 +936,60 @@ class WorkflowAndAbortTests(unittest.TestCase):
             ):
                 self.assertTrue(supervisor.process_group_alive(42))
 
+    def test_shutdown_capability_rejects_non_linux(self):
+        with mock.patch.object(supervisor.sys, "platform", "darwin"):
+            with self.assertRaisesRegex(RuntimeError, "requires Linux"):
+                supervisor.require_session_shutdown_support()
+
+    def test_shutdown_capability_requires_pidfds_and_visible_proc(self):
+        with (
+            mock.patch.object(supervisor.sys, "platform", "linux"),
+            mock.patch.object(supervisor.os, "pidfd_open", None, create=True),
+            mock.patch.object(supervisor.signal, "pidfd_send_signal", create=True),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "pidfd"):
+                supervisor.require_session_shutdown_support()
+
+        with (
+            mock.patch.object(supervisor.sys, "platform", "linux"),
+            mock.patch.object(supervisor.os, "pidfd_open", create=True),
+            mock.patch.object(supervisor.signal, "pidfd_send_signal", create=True),
+            mock.patch.object(
+                supervisor, "proc_visibility_complete", return_value=True
+            ),
+        ):
+            supervisor.require_session_shutdown_support()
+
+        with (
+            mock.patch.object(supervisor.sys, "platform", "linux"),
+            mock.patch.object(supervisor.os, "pidfd_open", create=True),
+            mock.patch.object(supervisor.signal, "pidfd_send_signal", create=True),
+            mock.patch.object(
+                supervisor, "proc_visibility_complete", return_value=False
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "visible /proc"):
+                supervisor.require_session_shutdown_support()
+
+    def test_main_checks_shutdown_support_before_supervisor_construction(self):
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                supervisor, "parse_args", return_value=mock.sentinel.args
+            ),
+            mock.patch.object(
+                supervisor,
+                "require_session_shutdown_support",
+                side_effect=RuntimeError("unsupported shutdown host"),
+            ) as require_support,
+            mock.patch.object(supervisor, "Supervisor") as supervisor_class,
+            mock.patch.object(supervisor.sys, "stderr", stderr),
+        ):
+            self.assertEqual(supervisor.main([]), 2)
+        require_support.assert_called_once_with()
+        supervisor_class.assert_not_called()
+        self.assertIn("unsupported shutdown host", stderr.getvalue())
+
     def test_linux_group_scan_rejects_hidden_proc_and_non_linux_proc(self):
         with tempfile.TemporaryDirectory() as temp:
             proc_root = Path(temp)
@@ -2069,6 +2123,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                             ),
                             mock.patch.object(
                                 supervisor, "Supervisor", SignaledSupervisor
+                            ),
+                            mock.patch.object(
+                                supervisor, "require_session_shutdown_support"
                             ),
                             mock.patch.object(supervisor.sys, "stderr", stderr),
                         ):

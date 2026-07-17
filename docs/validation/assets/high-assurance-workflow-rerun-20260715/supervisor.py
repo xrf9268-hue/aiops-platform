@@ -736,6 +736,17 @@ def proc_visibility_complete() -> bool:
     return found_proc_mount
 
 
+def require_session_shutdown_support() -> None:
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("safe worker-session shutdown requires Linux")
+    if not callable(getattr(os, "pidfd_open", None)) or not callable(
+        getattr(signal, "pidfd_send_signal", None)
+    ):
+        raise RuntimeError("safe worker-session shutdown requires Linux pidfd support")
+    if not proc_visibility_complete():
+        raise RuntimeError("safe worker-session shutdown requires visible /proc")
+
+
 def linux_process_group_snapshot(
     pgid: int,
 ) -> ProcSessionSnapshot | None:
@@ -1859,6 +1870,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
+        require_session_shutdown_support()
         with termination_signal_handlers():
             return Supervisor(args).run()
     except Exception as exc:

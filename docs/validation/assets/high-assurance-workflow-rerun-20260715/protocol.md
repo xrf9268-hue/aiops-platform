@@ -170,14 +170,18 @@ additional `SIGINT`, `SIGTERM`, and `SIGHUP` signals cannot interrupt its safety
 sequence.
 Per-process group-signal, pidfd, and wait failures are accumulated while
 cleanup continues. No `poll` or `wait` may run before the final possible
-signal. Direct-process kill is a non-Linux fallback only while the leader is
-still unreaped. On Linux, the supervisor verifies its PID, process group, and
-session in a non-hidden `/proc` and rejects any unsafe row among stacked proc
-mounts. It scans the entire worker session (session ID equals the initial
-leader PID), tracking `(pid,starttime)` identities across process groups. A
-member is terminal only when its state is `Z`/`X`/`x` and `num_threads == 1`;
-a terminal leader with another live thread remains live. A terminal-only result
-requires the same non-empty identity set, including the unreaped leader, in two
+signal. The published post-run CLI refuses to start any worker unless the host
+is Linux, `pidfd_open` and `pidfd_send_signal` are callable, and a complete,
+non-hidden `/proc` is visible. The at-activation Darwin supervisor did not have
+this gate; the restriction protects only a fresh run.
+
+On supported Linux hosts, the supervisor verifies its PID, process group, and
+session in `/proc` and rejects any unsafe row among stacked proc mounts. It
+scans the entire worker session (session ID equals the initial leader PID),
+tracking `(pid,starttime)` identities across process groups. A member is
+terminal only when its state is `Z`/`X`/`x` and `num_threads == 1`; a terminal
+leader with another live thread remains live. A terminal-only result requires
+the same non-empty identity set, including the unreaped leader, in two
 consecutive complete scans. A stat entry that vanishes during a scan is ignored
 as exited, while unreadable, malformed, hidden, cross-namespace, leaderless,
 unstable, or exhausted state fails closed.
@@ -188,11 +192,11 @@ same-session member. Each target uses pre-stat, `pidfd_open`, and post-stat
 cannot redirect a signal; SIGKILL rescans are bounded and repeated to catch
 fork races. Shutdown is complete only after every owned worker session has a
 final no-live proof while its leader is still unreaped. Only then may `wait`
-reap leaders, and no later numeric session scan or signal is allowed;
-otherwise the supervisor records `workers_stop_incomplete`, reports the live
-PIDs, and never marks the run stopped. Every worker log close is attempted;
-close failures are accumulated, cannot mask a termination-evidence error, and
-cannot trigger a second shutdown after workers are already stopped.
+reap leaders, and no later numeric session scan or signal is allowed; otherwise
+the supervisor records `workers_stop_incomplete`, reports the live PIDs, and
+never marks the run stopped. Every worker log close is attempted; close
+failures are accumulated, cannot mask a termination-evidence error, and cannot
+trigger a second shutdown after workers are already stopped.
 
 ## Operator boundary
 

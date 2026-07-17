@@ -77,6 +77,26 @@ post-push reconcile-cancel race + the upstream config gap already settled it as 
 removal — research that should have produced a direct verdict up front, before
 any option was offered.
 
+### Principle 8 — run the deletion test before expanding scope
+During #1117, a review finding about macOS session shutdown grew into a proposed
+private Darwin `libproc` / Mach / audit-token adapter of roughly 300
+implementation lines, roughly 200 test lines, and six touched files. The code
+could improve only a future run: the one-shot historical validation had already
+finished, so adding the subsystem after the fact could neither repair its
+recorded evidence nor change its `keep disabled pending a named defect` verdict.
+
+The deletion test showed that cross-platform capability was optional while
+shutdown safety was not. Removing the Darwin subsystem preserved required
+evidence and safety for every remaining in-scope execution because the published
+supervisor could reject unsupported hosts before mutating state or spawning
+workers, retain the existing Linux pidfd + `/proc` path, and require a fresh
+Linux/Docker run for new shutdown evidence. This was a scope-control failure,
+not a line-count failure: implementation depth had outrun the issue's ability to
+benefit from it. The earned rule is therefore to delete only when the remaining
+supported surface stays evidentially sound and safe, and to move optional
+expansion into a separately scoped issue instead of letting one PR take control
+of the project.
+
 ## Cross-cutting checklist
 
 ### Item 1 — audit adjacent paths before touching a SPEC code path

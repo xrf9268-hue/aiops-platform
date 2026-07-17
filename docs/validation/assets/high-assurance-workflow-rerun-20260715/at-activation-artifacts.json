@@ -4,10 +4,10 @@
   "artifacts": [
     {
       "published_file": "supervisor.py",
-      "published_sha256": "5ff4a051f08026cf1d2d49a421050569ee979165ff60f787f9ec240b0e36ad0e",
+      "published_sha256": "b483bd1223f03bced2004d643cbda4c4d08f991469971669091f81cdcc90f86d",
       "at_activation_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
       "reconstruction_patch": "supervisor-at-activation.patch",
-      "reconstruction_patch_sha256": "68f4f91221c7dd6ca473ee8c3e34374af3339651df990fc12fc87219daac4dce",
+      "reconstruction_patch_sha256": "e8ba1f67001ba8f28d45bca37c0c225519f484ab6d7ee6e6a74ba37fbf97f74c",
       "reconstruction_command": "patch -s -o - supervisor.py < supervisor-at-activation.patch",
       "post_run_changes": [
         "typed counter-regression classification",
@@ -15,20 +15,22 @@
         "persisted preflight_directories evidence",
         "fail-closed worker cleanup when termination evidence writes fail",
         "interrupt-safe shutdown for KeyboardInterrupt, SIGTERM, and SIGHUP including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated signals, isolated group-probe and pidfd-target failures, unreaped leader identity anchoring, stable visibility-verified Linux session classification, identity-rechecked pidfd signaling across sibling process groups, no-live proof before reaping, and worker-log close failures",
+        "pre-start Linux pidfd and visible-proc capability gate",
         "unused raw_dir removal"
       ]
     },
     {
       "published_file": "protocol.md",
-      "published_sha256": "a5b5cb6ebc5f22d8aeb3310a4bd9dffd1df0bd3ec8455e99f72e75163f556e28",
+      "published_sha256": "e9259beb83294e5999a770e22c2cb676a7cc2449c193cccf64f379094bd1f18f",
       "at_activation_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
       "reconstruction_patch": "protocol-at-activation.patch",
-      "reconstruction_patch_sha256": "d278d5f26874ccc028d6e3e20bc482e07a77faa60d4cd2cb00bb14e50a56bcde",
+      "reconstruction_patch_sha256": "33f52bd0d3657c0b173459738bb2998ff5a9181a8f42a813de21c4e3d226f97a",
       "reconstruction_command": "patch -s -o - protocol.md < protocol-at-activation.patch",
       "post_run_changes": [
         "chronology-only header correction distinguishing initial preregistration from the pre-activation permission amendment",
         "termination-evidence safety exception prioritizing worker shutdown before reporting incomplete evidence",
-        "operator-interrupt and SIGTERM/SIGHUP routing including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated-signal shielding, per-process termination isolation, unreaped leader identity anchoring, stable visibility-verified Linux session classification, identity-rechecked pidfd signaling across sibling process groups, no-live proof before reaping, and worker-log close failure semantics"
+        "operator-interrupt and SIGTERM/SIGHUP routing including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated-signal shielding, per-process termination isolation, unreaped leader identity anchoring, stable visibility-verified Linux session classification, identity-rechecked pidfd signaling across sibling process groups, no-live proof before reaping, and worker-log close failure semantics",
+        "published supervisor pre-start Linux pidfd and visible-proc capability gate"
       ]
     }
   ]

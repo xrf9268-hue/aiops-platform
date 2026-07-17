@@ -21,7 +21,10 @@ function took 7.355921 seconds while GitHub REST and GraphQL quotas remained
 above 97%. Second, final review proved that the at-activation supervisor did
 not reject or persist equal/non-empty workspace and mirror roots. The operator
 checked those roots before activation, but no immutable artifact preserved the
-result, so this report does not use that observation as proof. These defects do
+result, so this report does not use that observation as proof. Third, on the
+actual Darwin host, the at-activation shutdown path signaled and checked only
+each initial process group; a reproducible same-session child in a sibling
+process group survived while shutdown was reported complete. These defects do
 not prove the profile itself failed, but they prevent the required operational
 certification.
 
@@ -126,11 +129,13 @@ required check, exact tuple, zero reviews, and zero review threads were
 confirmed only by a read-only GitHub reread after termination and are marked as
 post-abort evidence.
 
-Final review also found that the at-activation supervisor did not enforce or
-persist the activation gate requiring pairwise-distinct, empty maker/reviewer
-workspaces and mirror roots. The published supervisor now derives workspace
-roots from both workflow front matters, rejects duplicate, overlapping, or
-non-empty roots,
+Final review also found two gaps in the at-activation supervisor. It did not
+enforce or persist the activation gate requiring pairwise-distinct, empty
+maker/reviewer workspaces and mirror roots. On the actual Darwin host, it also
+signaled and checked only each initial process group, so a live same-session
+child in a sibling process group could survive while shutdown was reported as
+complete. The published supervisor now derives workspace roots from both
+workflow front matters, rejects duplicate, overlapping, or non-empty roots,
 and persists `preflight_directories` before forge reads or worker start. It
 also replaces error-text classification with a dedicated counter-regression
 exception, guarantees the full TERM/grace/KILL/proof/wait cleanup even when
@@ -153,10 +158,14 @@ same-namespace, non-hidden `/proc`. Hidden, unreadable, cross-namespace,
 leaderless, unstable, or exhausted state fails closed, while a stat entry that
 vanishes during enumeration is treated as exited. Only after this proof may the
 leader be reaped; an already reaped leader is never used to authorize a numeric
-session signal. It attempts
-every worker-log close without masking the primary evidence error or retrying
-an already completed shutdown, and removes an unused field. Those post-run
-fixes improve the next run only; they do not retroactively validate this one.
+session signal. Rather than adding a second kernel-specific cleanup path to this
+one-shot asset, the published post-run CLI now refuses to start workers unless
+Linux pidfd support and a complete, non-hidden `/proc` are available. A fresh
+rerun must use the published Linux worker artifact and preregister that platform
+change. The supervisor also attempts every worker-log close without masking the
+primary evidence error or retrying an already completed shutdown, and removes
+an unused field. Those post-run fixes improve the next run only; they do not
+retroactively validate this one.
 
 ## Comparison with the valid #1089 standard arm
 
