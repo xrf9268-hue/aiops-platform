@@ -80,12 +80,13 @@ any option was offered.
 ### Principle 8 — run the deletion test before expanding scope
 PR #1125 for validation issue #1117 grew to 22 files and 8,734 insertions after
 the one-shot run had already ended, because optional future-run hardening added
-a new cross-platform runtime, thousands of test lines, reconstruction patches,
-and a governance change. None of that surface could change the completed arm's
-evidence or verdict. Deleting it preserved the required evidence and safety
-boundary by keeping the exact historical artifacts, marking them unsafe for
-reuse, and moving any corrected experiment to a fresh issue, protocol, and
-repository. This was a scope-control failure, not a line-count failure.
+a new Linux-only future-run shutdown runtime, thousands of test lines,
+reconstruction patches, and a governance change. None of that surface could
+change the completed arm's evidence or verdict. Deleting it preserved the
+required evidence and safety boundary by keeping the exact historical
+artifacts, marking them unsafe for reuse, and moving any corrected experiment
+to a fresh issue, protocol, and repository. This was a scope-control failure,
+not a line-count failure.
 
 ## Cross-cutting checklist
 
