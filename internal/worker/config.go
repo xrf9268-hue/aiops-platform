@@ -30,7 +30,7 @@ type Config struct {
 	// the runner-level SPEC §16.5 per-turn refresh hook
 	// (runner.RunInput.RefreshIssueState). Returning nil for a task opts
 	// that run out of the refresh (e.g. mock tasks with no tracker row);
-	// the runner then falls back to the agent-driven continue flag.
+	// the runner then uses its single-turn clean fallback.
 	IssueStateRefresher IssueStateRefresherFactory
 	// OperatorTerminalStopLookup, when non-nil, builds a process-local latch
 	// reader for post-stop mutation auditing. Unlike IssueStateRefresher, this
@@ -42,7 +42,7 @@ type Config struct {
 // runner invokes between turns. The factory receives the task and the
 // workflow config that resolved for it (so the closure can read the
 // active_states vocabulary) and returns either a callable or nil when the
-// task should keep the legacy continue-driven loop.
+// task should use the runner's single-turn fallback.
 type IssueStateRefresherFactory func(t task.Task, cfg workflow.Config) runner.IssueStateRefresher
 
 // OperatorTerminalStopLookupFactory builds a per-task lookup for the

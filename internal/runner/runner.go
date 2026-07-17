@@ -32,10 +32,8 @@ type RunInput struct {
 	// RefreshIssueState, when non-nil, implements SPEC §16.5's per-turn
 	// tracker refresh: the runner calls it after each agent turn finishes
 	// and exits cleanly when the issue is no longer in the workflow's
-	// active states. Without it the runner falls back to the agent-driven
-	// `continue` notification flag and operator-cancel only becomes
-	// visible at the next orchestrator poll tick. Nil keeps the legacy
-	// behavior for callers (tests, mock runners) that have no tracker.
+	// active states. Nil gives callers without a tracker hook a single-turn
+	// clean fallback; the runner does not invent continuation state.
 	RefreshIssueState IssueStateRefresher
 	// LookupOperatorTerminalStop reads the process-local Operator Terminal Stop
 	// latch for this run's issue. It is intentionally narrower than

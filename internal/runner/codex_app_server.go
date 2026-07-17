@@ -300,24 +300,15 @@ type appServerClient struct {
 	runtimeEvents       []task.RuntimeEvent
 	runtimeEventSink    func(task.RuntimeEvent)
 	phaseTransitionSink func(from, to task.RunAttemptPhase)
-	// continueRun is the agent-emitted "should we keep going?" signal
-	// from turn/completed notifications (`params.continue`). It only
-	// gates the legacy path: when refreshIssueState is wired, SPEC §16.5
-	// per-turn tracker refresh is the authoritative continuation gate
-	// and continueRun is consulted only as the agent's secondary opinion.
-	// Keeping both lets cooperative agents end early (continueRun=false)
-	// while still letting the operator cancel an otherwise-productive
-	// worker by moving the issue out of the active states.
-	continueRun       bool
-	refreshIssueState IssueStateRefresher
-	tools             DynamicToolSet
-	turnTimeoutMs     int
-	readTimeoutMs     int
-	stallTimeoutMs    int
-	approvalPolicy    any
-	lastTerminal      time.Time
-	lastRuntimeEvent  string
-	issueExitState    *IssueStateSnapshot
+	refreshIssueState   IssueStateRefresher
+	tools               DynamicToolSet
+	turnTimeoutMs       int
+	readTimeoutMs       int
+	stallTimeoutMs      int
+	approvalPolicy      any
+	lastTerminal        time.Time
+	lastRuntimeEvent    string
+	issueExitState      *IssueStateSnapshot
 }
 type codexAppServerTextInput struct {
 	Type         string `json:"type"`
@@ -342,7 +333,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	if err != nil {
 		return err
 	}
-	turnLimit, cleanBudgetStop := effectiveTurnLimit(in)
+	turnLimit := effectiveTurnLimit(in)
 	for turn := 1; turn <= turnLimit; turn++ {
 		keepGoing, err := c.runSingleTurn(ctx, in, threadID, prompt, turn)
 		if err != nil {
@@ -352,21 +343,18 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			return nil
 		}
 	}
-	if cleanBudgetStop {
-		return nil
-	}
-	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", turnLimit)
+	return nil
 }
 
-func effectiveTurnLimit(in RunInput) (limit int, cleanBudgetStop bool) {
+func effectiveTurnLimit(in RunInput) int {
 	maxTurns := in.Workflow.Config.Agent.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 20
 	}
 	if in.CleanTurnBudget > 0 && in.CleanTurnBudget <= maxTurns {
-		return in.CleanTurnBudget, true
+		return in.CleanTurnBudget
 	}
-	return maxTurns, false
+	return maxTurns
 }
 
 // initSession records the run's sinks and caches the per-run codex config off
@@ -375,7 +363,6 @@ func (c *appServerClient) initSession(in RunInput) {
 	c.runtimeEventSink = in.RuntimeEventSink
 	c.phaseTransitionSink = in.PhaseTransitionSink
 	c.nextID = 1
-	c.continueRun = false
 	c.refreshIssueState = in.RefreshIssueState
 	c.tools = DynamicToolsForWorkflow(
 		workflow.Workflow{Config: in.Workflow.Config},
@@ -425,9 +412,8 @@ func (c *appServerClient) startThread(ctx context.Context, in RunInput) (string,
 }
 
 // runSingleTurn starts one turn, awaits its completion, and reports whether the
-// loop should continue. Mirrors upstream run_turn: keepGoing=false stops the run
-// (a clean turn with continue=false, or a SPEC §16.5 self-stop), a non-nil error
-// aborts it.
+// loop should continue. Tracker state is the sole continuation authority;
+// keepGoing=false is a clean stop, while a non-nil error aborts the run.
 func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, threadID, prompt string, turn int) (bool, error) {
 	turnID, err := c.startTurn(ctx, in, threadID, prompt, turn)
 	if err != nil {
@@ -438,7 +424,6 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 		c.recordFirstTurnStarted(threadID, turnID)
 	}
 	c.recordTurnStarted(threadID, turnID, turn)
-	c.continueRun = false
 	turnCtx := ctx
 	var cancel context.CancelFunc
 	if c.turnTimeoutMs > 0 {
@@ -455,20 +440,20 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 	// SPEC §16.5: refresh tracker state between turns so an operator who
 	// cancelled the issue mid-run sees the worker exit after the current turn
 	// rather than at the next orchestrator poll tick. Errors here are surfaced
-	// verbatim per SPEC ("if refreshed_issue failed: fail"); a nil refresher
-	// keeps the legacy continueRun-only path for callers (mock runner, tests)
-	// with no tracker hook.
-	if c.refreshIssueState != nil {
-		snapshot, err := c.refreshIssueState(ctx)
-		if err != nil {
-			return false, fmt.Errorf("codex app-server refresh issue state: %w", err)
-		}
-		if !snapshot.Active {
-			c.issueExitState = &snapshot
-			return false, nil
-		}
+	// verbatim per SPEC ("if refreshed_issue failed: fail"). Callers without a
+	// tracker hook get a single-turn clean fallback rather than invented state.
+	if c.refreshIssueState == nil {
+		return false, nil
 	}
-	return c.continueRun, nil
+	snapshot, err := c.refreshIssueState(ctx)
+	if err != nil {
+		return false, fmt.Errorf("codex app-server refresh issue state: %w", err)
+	}
+	if !snapshot.Active {
+		c.issueExitState = &snapshot
+		return false, nil
+	}
+	return true, nil
 }
 
 // startTurn issues turn/start and resolves the turn id. A failure on the first
