@@ -24,12 +24,9 @@
     "max_concurrent_agents_per_worker": 1,
     "required_check": "build-test",
     "protocol_at_activation_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
-    "published_protocol_sha256": "e9259beb83294e5999a770e22c2cb676a7cc2449c193cccf64f379094bd1f18f",
-    "protocol_at_activation_patch_sha256": "33f52bd0d3657c0b173459738bb2998ff5a9181a8f42a813de21c4e3d226f97a",
     "supervisor_at_activation_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
-    "published_supervisor_sha256": "b483bd1223f03bced2004d643cbda4c4d08f991469971669091f81cdcc90f86d",
-    "supervisor_at_activation_patch_sha256": "e8ba1f67001ba8f28d45bca37c0c225519f484ab6d7ee6e6a74ba37fbf97f74c",
-    "at_activation_artifact_manifest_sha256": "5977eebe8f14edb9c1431a0c761c7f67d5ec5739cf2b882557a0024cbe82a360",
+    "supervisor_test_at_activation_sha256": "e8fa5130dbba63aa9e3987addaa1c9f2932771af0e83694b9970235737c8e4ec",
+    "at_activation_artifact_manifest_sha256": "8df4e49875c3c4a4be1dc775275f856b8b3938c8d6219dc54075c570e09d5520",
     "holdout_sha256": "cc389a18573c0687b77ee510f1779750322300a302483293599f6779ed153a21",
     "maker_workflow_sha256": "8b0c7f715394a1540aa529862dfdd9494b98c182a6d2ba23f3d919f1977468c7",
     "reviewer_workflow_sha256": "ce7727b4420c83ba0ac865557c5da29e47db0e351f33ab8352ef0787f90e43ee",
@@ -173,16 +170,7 @@
   },
   "post_run_review": {
     "at_activation_evidence_gap": "Distinct and empty workspace/mirror roots were manually checked but neither enforced nor persisted by the at-activation supervisor. Its Darwin shutdown path also signaled and checked only each initial process group, so it could not prove that a same-session sibling process group had stopped. This report treats neither gap as satisfied evidence.",
-    "published_supervisor_hardening": [
-      "derive workspace roots from both frozen workflow front matters",
-      "reject any equal, overlapping, non-directory, or non-empty workspace/mirror root",
-      "persist a preflight_directories event before forge reads or worker start",
-      "classify token-counter regression with a dedicated exception",
-      "complete worker shutdown and fail with a classified error when termination evidence cannot be persisted",
-      "route KeyboardInterrupt, SIGTERM, and SIGHUP through shutdown, including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, and outer retry ownership for unproven survivors; shield cleanup from repeated signals; isolate group-probe and pidfd-target failures while continuing other workers and siblings; preserve unreaped leaders as PID/PGID/SID identity anchors through the final signal and no-live proof; use pre/post-stat-verified Linux pidfds to signal live members across sibling process groups; require stable terminal-only (pid,starttime) membership including the leader before reaping; fail closed on lost ownership or incomplete proc visibility; and preserve evidence-error priority over log-close failures",
-      "refuse before supervisor construction unless Linux pidfd support and a complete visible proc filesystem are available",
-      "remove the unused raw_dir field"
-    ],
-    "effect_on_result": "None. Post-run hardening cannot rehabilitate the stopped arm; a fresh protocol and repository are required."
+    "artifact_policy": "The committed protocol, supervisor, and supervisor tests are the exact files frozen before activation. They preserve the observed defects as historical evidence and are not approved for reuse.",
+    "effect_on_result": "None. Review findings cannot rehabilitate the stopped arm; any corrected experiment requires a fresh protocol and repository."
   }
 }

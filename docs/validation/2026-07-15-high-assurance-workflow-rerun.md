@@ -42,8 +42,8 @@ frozen before activation. The main evidence is:
 - [forge timeline](assets/high-assurance-workflow-rerun-20260715/forge-timeline.json)
 - [post-abort read-only probe](assets/high-assurance-workflow-rerun-20260715/post-abort-probe.json)
 - [at-activation artifact manifest](assets/high-assurance-workflow-rerun-20260715/at-activation-artifacts.json)
-- [at-activation supervisor reconstruction patch](assets/high-assurance-workflow-rerun-20260715/supervisor-at-activation.patch)
-- [at-activation protocol reconstruction patch](assets/high-assurance-workflow-rerun-20260715/protocol-at-activation.patch)
+- [at-activation supervisor](assets/high-assurance-workflow-rerun-20260715/supervisor.py)
+- [at-activation supervisor tests](assets/high-assurance-workflow-rerun-20260715/supervisor_test.py)
 - [state manifest](assets/high-assurance-workflow-rerun-20260715/raw-state-manifest.json)
 - [supervisor-persisted state payloads](assets/high-assurance-workflow-rerun-20260715/raw-state/)
 
@@ -74,27 +74,20 @@ GitHub's user-owned-repository permission model before activation, so the run
 restored #1089's `zjlgdx` setup/reviewer/operator identity without granting
 `bytevane` push permission.
 
-The published protocol header now distinguishes its initial preregistration
-from that post-repository, pre-activation permission amendment. The exact
-at-activation protocol and supervisor remain reconstructable from the
-published files plus the adjacent patches. From the asset directory, use these
-non-destructive commands:
-
-```sh
-patch -s -o - protocol.md < protocol-at-activation.patch
-patch -s -o - supervisor.py < supervisor-at-activation.patch
-```
-
-Their expected SHA-256 values are recorded in `at-activation-artifacts.json`
-and `summary.json`.
+The protocol header distinguishes its initial preregistration from that
+post-repository, pre-activation permission amendment. The committed protocol,
+supervisor, and supervisor tests are byte-for-byte the files frozen before
+activation; their SHA-256 values are recorded in
+`at-activation-artifacts.json` and `summary.json`. They are historical evidence
+with known defects and are not approved for reuse. No later fixes are folded
+into them.
 
 ## Observed run
 
 Times are UTC. During the live arm, the operator performed only the
 pre-registered `aiops:todo` activation for issue 1; no code, PR, label,
-workflow, check, review, or setting was repaired before termination. The
-post-run artifact hardening documented below occurred only after the arm had
-stopped and cannot affect its verdict.
+workflow, check, review, or setting was repaired before termination. No
+post-run repair has been folded into the frozen files or the verdict.
 
 | Time | Event |
 | --- | --- |
@@ -134,38 +127,12 @@ enforce or persist the activation gate requiring pairwise-distinct, empty
 maker/reviewer workspaces and mirror roots. On the actual Darwin host, it also
 signaled and checked only each initial process group, so a live same-session
 child in a sibling process group could survive while shutdown was reported as
-complete. The published supervisor now derives workspace roots from both
-workflow front matters, rejects duplicate, overlapping, or non-empty roots,
-and persists `preflight_directories` before forge reads or worker start. It
-also replaces error-text classification with a dedicated counter-regression
-exception, guarantees the full TERM/grace/KILL/proof/wait cleanup even when
-shutdown evidence writes fail, reports those failures with a classified error,
-and routes operator interrupts plus OS `SIGTERM`/`SIGHUP` through the same cleanup.
-This includes interruption between process spawn and worker tracking even when
-that local cleanup cannot persist its evidence. Signals immediately before fork
-through registration of the returned `Popen` are deferred until ownership is
-established; local cleanup and ownership transfer are signal-guarded, and any
-process group not proven absent remains owned for the outer shutdown retry.
-The shutdown sequence now resists additional termination signals, isolates
-per-process termination errors, and retains each unreaped leader as the
-PID/PGID/SID identity anchor until the last possible signal and final no-live
-proof. On Linux it supplements the initial group signal with identity-rechecked
-pidfds for every live member of the complete worker session, including sibling
-process groups, and repeats bounded SIGKILL scans for fork races. A member is
-terminal only when it is `Z`/`X`/`x` with exactly one thread; the same non-empty
-`(pid,starttime)` set including the leader must be observed twice through a
-same-namespace, non-hidden `/proc`. Hidden, unreadable, cross-namespace,
-leaderless, unstable, or exhausted state fails closed, while a stat entry that
-vanishes during enumeration is treated as exited. Only after this proof may the
-leader be reaped; an already reaped leader is never used to authorize a numeric
-session signal. Rather than adding a second kernel-specific cleanup path to this
-one-shot asset, the published post-run CLI now refuses to start workers unless
-Linux pidfd support and a complete, non-hidden `/proc` are available. A fresh
-rerun must use the published Linux worker artifact and preregister that platform
-change. The supervisor also attempts every worker-log close without masking the
-primary evidence error or retrying an already completed shutdown, and removes
-an unused field. Those post-run fixes improve the next run only; they do not
-retroactively validate this one.
+complete. Because the arm is complete, no remaining #1117 execution can benefit
+from after-the-fact hardening. This PR therefore preserves the exact defective
+artifacts instead of publishing a future-run supervisor. A corrected experiment
+belongs to a separate issue with a fresh protocol and repository; it must
+address all three named defects and preregister any platform change before
+activation.
 
 ## Comparison with the valid #1089 standard arm
 
@@ -189,6 +156,7 @@ continuation-semantics issue was not met.
 
 The next valid experiment must first remove the named evidence-path defect and
 then start from a fresh repository and a newly frozen protocol. This stopped
-repository must not be resumed or repaired into a valid arm. Until a fresh arm
-reaches reviewer, exact-tuple external review, native merge/closure, and the
-fixed public regression suite, the high-assurance profile remains disabled.
+repository must not be resumed or repaired into a valid arm, and the historical
+supervisor/protocol committed here must not be reused. Until a fresh arm reaches
+reviewer, exact-tuple external review, native merge/closure, and the fixed
+public regression suite, the high-assurance profile remains disabled.
