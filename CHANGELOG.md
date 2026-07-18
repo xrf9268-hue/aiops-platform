@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.17](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.16...v0.1.17) (2026-07-18)
+
+
+### Bug Fixes
+
+* **observability:** scope claim token budget ([#1124](https://github.com/xrf9268-hue/aiops-platform/issues/1124)) ([b1180b9](https://github.com/xrf9268-hue/aiops-platform/commit/b1180b93b8b36d45a8f4a419cbdf0243d7e44f11))
+* **orchestrator:** classify issue refresh outcomes ([#1121](https://github.com/xrf9268-hue/aiops-platform/issues/1121)) ([16d9105](https://github.com/xrf9268-hue/aiops-platform/commit/16d91050d650ab5e6c846340ff421674a5862ac3))
+* **orchestrator:** reconcile before dispatch gates ([#1119](https://github.com/xrf9268-hue/aiops-platform/issues/1119)) ([054bab4](https://github.com/xrf9268-hue/aiops-platform/commit/054bab42ca9b477e6b93d6c0b94aa7fd2d2cf34d))
+* **runner:** align Codex temp root and sandbox guidance ([#1123](https://github.com/xrf9268-hue/aiops-platform/issues/1123)) ([5f813c8](https://github.com/xrf9268-hue/aiops-platform/commit/5f813c806b5128fe8444ec96a8e6ab353afbfbc2))
+* **runner:** restore schema-aligned continuation ([#1132](https://github.com/xrf9268-hue/aiops-platform/issues/1132)) ([9600298](https://github.com/xrf9268-hue/aiops-platform/commit/9600298626642c4cc78e254d762a1e0557311177)), closes [#1129](https://github.com/xrf9268-hue/aiops-platform/issues/1129)
+* **worker:** remove only confirmed terminal workspaces ([#1122](https://github.com/xrf9268-hue/aiops-platform/issues/1122)) ([6ccf080](https://github.com/xrf9268-hue/aiops-platform/commit/6ccf0800fc6e68f30a63ebcf78788672e3f28a62))
+
 ## [0.1.16](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.15...v0.1.16) (2026-07-15)
 
 
