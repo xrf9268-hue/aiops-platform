@@ -22,6 +22,32 @@ func TestSafeRemoveRejectsEmptyRootOrPath(t *testing.T) {
 	}
 }
 
+func TestSafeRemoveRejectsRelativeRootOrPath(t *testing.T) {
+	root := t.TempDir()
+
+	if err := SafeRemove("relative-root", filepath.Join(root, "x")); !errors.Is(err, ErrSafeRemoveInvalidPath) {
+		t.Fatalf("relative root err = %v, want ErrSafeRemoveInvalidPath", err)
+	}
+	if err := SafeRemove(root, "relative-path"); !errors.Is(err, ErrSafeRemoveInvalidPath) {
+		t.Fatalf("relative path err = %v, want ErrSafeRemoveInvalidPath", err)
+	}
+}
+
+func TestValidateRemoveDoesNotDeleteValidPath(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tsk-validate")
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
+		t.Fatalf("mkdir valid path: %v", err)
+	}
+
+	if _, err := ValidateRemove(root, taskDir); err != nil {
+		t.Fatalf("ValidateRemove valid path: %v", err)
+	}
+	if _, err := os.Stat(taskDir); err != nil {
+		t.Fatalf("validated path must remain: %v", err)
+	}
+}
+
 func TestSafeRemoveRejectsRootItself(t *testing.T) {
 	root := t.TempDir()
 
@@ -55,6 +81,25 @@ func TestSafeRemoveRejectsParentTraversal(t *testing.T) {
 
 	if err := SafeRemove(root, traverse); !errors.Is(err, ErrSafeRemoveEscapesRoot) {
 		t.Fatalf("traversal err = %v, want ErrSafeRemoveEscapesRoot", err)
+	}
+}
+
+func TestSafeRemoveRejectsRawParentTraversalInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o700); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	rawPath := filepath.Join(root, "nested") + string(filepath.Separator) + ".." + string(filepath.Separator) + "target"
+
+	if err := SafeRemove(root, rawPath); !errors.Is(err, ErrSafeRemoveEscapesRoot) {
+		t.Fatalf("raw traversal err = %v, want ErrSafeRemoveEscapesRoot", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("target must remain after raw traversal rejection: %v", err)
 	}
 }
 

@@ -278,22 +278,33 @@ they are the long-lived cache that keeps worktree re-creation cheap.
 
 ## Cleanup containment invariant
 
-All cleanup paths that delete a per-task worktree go through
-`workspace.SafeRemove(root, path)`. The helper refuses to delete a path
-that is not strictly contained under the configured workspace root:
-empty/whitespace input, the root itself, a sibling of the root, a
-`..` traversal, and symlinks whose resolved target points outside the
-root all return `ErrSafeRemoveEscapesRoot` and the on-disk path is left
-untouched. This is a defense-in-depth guard against a future refactor or
-a malformed hook output that could otherwise pass an empty string or
+All cleanup paths that delete a per-task worktree use the workspace
+package's shared validated-removal guard. Before any `before_remove`
+hook, the cleanup seam calls the non-mutating
+`workspace.ValidateRemove(root, path)` and retains its removal guard.
+The guard revalidates the path and the original canonical root identity
+after the hook, so replacing either the path or the root with an
+external symlink cannot redefine the deletion boundary. Standalone
+`SafeRemove` uses the same guard.
+
+Validation requires absolute root/path values and strict containment.
+Empty, whitespace-only, or relative values return
+`ErrSafeRemoveInvalidPath`; the root itself, a sibling, any raw `..`
+component, and resolved or dangling symlink escapes return
+`ErrSafeRemoveEscapesRoot`. Preflight failures do not start the hook,
+emit its lifecycle events, or mutate the filesystem. This is a
+defense-in-depth guard against a future refactor or malformed recorded
+path that could otherwise execute a hook outside the workspace or pass
 `/` into `os.RemoveAll` — see SPEC §9.5 Invariants 2 & 3, §15.2.
 
-The two production call sites today are
+The two hook-bearing production cleanup seams today are
 `internal/worker/runtask.go::removeWorkdirAfterHookFailure` (rollback
 after `after_create` hook failure) and
-`internal/worker/reconcile.go::removeWorkspace` (reconcile-driven
-cleanup for closed/cancelled issues). Any new cleanup code that touches
-`$AIOPS_WORKSPACE_ROOT` should call `workspace.SafeRemove` rather than
+`internal/worker/reconcile.go::RemoveIssueWorkspace` (shared startup
+and active-terminal cleanup). Any new hook-bearing cleanup code that
+touches `$AIOPS_WORKSPACE_ROOT` should preflight with `ValidateRemove`,
+retain the returned guard across the hook, then call its `Remove`
+method. Non-hook cleanup should call `SafeRemove` rather than
 `os.RemoveAll` directly.
 
 ## Troubleshooting

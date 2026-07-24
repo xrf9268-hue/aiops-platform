@@ -391,8 +391,8 @@ func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path stri
 }
 
 // RemoveWorkspaceRequest carries the inputs for a single per-issue workspace
-// removal through the shared before_remove → SafeRemove → reconcile_workspace
-// event sequence.
+// removal through the shared validate → before_remove → guarded removal →
+// reconcile_workspace event sequence.
 type RemoveWorkspaceRequest struct {
 	WorkspaceRoot      string
 	TaskID             string
@@ -407,9 +407,11 @@ type RemoveWorkspaceRequest struct {
 	HookEnvPassthrough []string
 }
 
-// RemoveIssueWorkspace runs the before_remove hook (best effort: a hook
-// failure is logged but does not abort removal), removes the workspace
-// directory via SafeRemove, then emits a reconcile_workspace remove event.
+// RemoveIssueWorkspace validates the recorded root/path before starting the
+// before_remove hook, retains that root identity across the hook, then
+// revalidates before removal. Hook failures remain best effort: they are logged
+// but do not abort a safe removal. A successful removal emits a
+// reconcile_workspace remove event.
 // It is the single removal routine shared by the startup sweep
 // (ReconcileStartup) and the SPEC §18.1 active-transition cleanup the
 // orchestrator triggers when a running issue moves to a terminal state
@@ -417,10 +419,14 @@ type RemoveWorkspaceRequest struct {
 // upstream Workspace.remove_issue_workspaces, which both paths also share.
 // It returns true when the directory was removed.
 func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorkspaceRequest) (bool, error) {
+	removal, err := workspace.ValidateRemove(req.WorkspaceRoot, req.Path)
+	if err != nil {
+		return false, fmt.Errorf("validate %s workspace %s: %w", req.Reason, req.Path, err)
+	}
 	if err := runWorkspaceHook(ctx, ev, req.TaskID, req.Identifier, req.Path, workspace.HookBeforeRemove, req.BeforeRemoveHook, req.HookTimeoutMillis, req.HookEnvPassthrough, req.WorkflowConfig); err != nil {
 		log.Printf("event=before_remove_hook_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", req.TaskID, req.IssueID, req.Identifier, req.Reason, req.Path, err)
 	}
-	if err := workspace.SafeRemove(req.WorkspaceRoot, req.Path); err != nil {
+	if err := removal.Remove(); err != nil {
 		return false, fmt.Errorf("remove %s workspace %s: %w", req.Reason, req.Path, err)
 	}
 	if err := runner.RemoveSandboxGoBuildCache(req.Path); err != nil {
