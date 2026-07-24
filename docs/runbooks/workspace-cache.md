@@ -148,20 +148,26 @@ Operational notes:
 
 ## SPEC §4.2 path-component sanitization
 
-Workspace path components (`<owner>`, `<repo>`, `<source_type>`,
-`<source_event_id>`, task-ID fallback) go through
-`workspace.SanitizeComponent`. The rule, lifted from SPEC §4.2:
+Generic workspace path components (`<owner>`, `<repo>`, `<source_type>`) go
+through `workspace.SanitizeComponent`. The issue identifier (or task-ID
+fallback when no identifier exists) goes through
+`workspace.IssueWorkspaceKey`. The base rule, lifted from SPEC §4.2:
 
 > Derive from `issue.identifier` by replacing any character not in
 > `[A-Za-z0-9._-]` with `_`.
 
-That is exactly what the sanitizer does today — case is preserved
-verbatim, and any other character (including the multi-byte runes of a
-CJK identifier) is substituted with a single `_`. On top of the SPEC
-rule the harness adds three filesystem-safety guards:
+Case is preserved verbatim, and any other character (including each multi-byte
+CJK rune) is substituted with one `_`. A safe identifier no longer than 120
+characters remains byte-for-byte unchanged. If replacement, fallback, or
+truncation changes the exact original identifier, the key reserves 18
+characters and appends `--` plus the first 16 lowercase hexadecimal characters
+of `SHA-256(original identifier)`. The hash input is never trimmed or
+normalized. On top of the SPEC rule the harness adds three filesystem-safety
+guards:
 
-1. **Rune-length cap**: long inputs are truncated to 120 runes so the
-   resulting directory name fits common filesystem limits.
+1. **Rune-length cap**: generic components are truncated to 120 runes. Changed
+   issue identifiers truncate their sanitized prefix to 102 runes before the
+   18-character suffix, so the final key remains within 120.
 2. **Path-traversal block**: a component that sanitizes to exactly `.`
    or `..` (the only two values that `filepath.Join` would interpret as
    a traversal segment) is replaced with the literal string `unknown`.
@@ -170,7 +176,7 @@ rule the harness adds three filesystem-safety guards:
 3. **Empty fallback**: an empty input maps to `unknown` so `PathFor`
    never produces an empty path segment.
 
-### Migration from the pre-SPEC layout
+### Migration from earlier layouts
 
 Before #229 the sanitizer lowercased the input, accepted any
 `unicode.IsLetter` rune (so CJK identifiers passed through unchanged),
@@ -178,14 +184,16 @@ and substituted `-` for invalid characters. The resulting workspace
 paths therefore looked like `acme/demo/linear_issue/lin-1-needs-fix`
 rather than the SPEC-conformant `acme/demo/linear_issue/LIN_1_Needs_Fix`.
 
-Because the project is pre-release ([`AGENTS.md`
+Symphony 0.0.2 also replaced unhashed sanitized issue keys with the
+collision-resistant form above. Because the project is pre-release ([`AGENTS.md`
 §SPEC-alignment-is-a-hard-requirement](../../AGENTS.md#spec-alignment-is-a-hard-requirement),
 [`DEVIATIONS.md`](../../DEVIATIONS.md)) the cutover is hard, not
-gradual: dirs created under the pre-#229 sanitizer are orphaned on
-disk and remain unmatched by current workspace keys. Startup
-reconciliation deliberately keeps those dirs because their absence from a
-tracker result is not proof of terminal state. Operators who no longer need
-the orphans should audit and remove them explicitly:
+gradual: dirs created under the pre-#229 sanitizer, unhashed sanitized keys, or
+historical rework suffixes are orphaned on disk and remain unmatched by current
+workspace keys. Startup reconciliation deliberately keeps those dirs because
+their absence from the canonical key map is not proof of terminal state.
+Operators who no longer need the orphans should audit and remove them
+explicitly:
 
 ```sh
 # Audit (no removals): list workspace components that contain old-style
@@ -195,34 +203,8 @@ find "$AIOPS_WORKSPACE_ROOT" -mindepth 4 -maxdepth 4 -type d
 # Migrate by wiping the workspace root entirely. The bare mirror cache
 # under $AIOPS_MIRROR_ROOT is untouched, so the next task pays only a
 # fresh worktree-add, not a fresh clone.
-rm -rf "$AIOPS_WORKSPACE_ROOT"/*
+rm -rf "${AIOPS_WORKSPACE_ROOT:?set the workspace root before pruning}"/*
 ```
-
-Active *rework* workspaces survive the cutover even without a manual
-sweep: `reworkWorkspaceKeyPrefixes` emits two prefix forms for each
-extracted base key so it matches every aiops-platform sanitizer
-vintage that may have written to disk
-(`internal/worker/reconcile.go`):
-
-1. `<base>_rework_…` — current SPEC §4.2 sanitizer.
-2. `<base>-rework-…` — interim/pre-#229 case-preserved layout with dash
-   separators. Because every shipped tracker builds the Rework key from
-   the all-lowercase `issue.ID` (a UUID or numeric value), this form
-   also matches the pre-#229 lowercased directories, e.g.
-   `linear_issue/issue-3-rework-2026-05-16t10-00-00z` produced by an
-   older worker for an active Linear Rework issue, where the base of the
-   dir name was the issue ID (`issue-3`) rather than the human-facing
-   identifier (`LIN-123`).
-
-(#679 removed a speculative third `<lowercased-pre-spec-base>-rework-…`
-form: since form 2 is case-preserving and the shipped trackers' keys are
-already lowercase, it never matched a directory form 2 did not. Re-add it
-only when a tracker actually emits an `issue.ID` containing uppercase or
-`[^a-zA-Z0-9._-]` characters.)
-
-Plain (non-rework) per-issue dirs created under the old sanitizer are
-not back-compat-matched. They remain on disk unless the tracker explicitly
-confirms the corresponding issue is terminal or an operator removes them.
 
 ## Cleanup policy
 

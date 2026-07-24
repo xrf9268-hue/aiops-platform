@@ -25,11 +25,8 @@ import (
 type IssueID string
 
 // Workspace is the orchestrator's view of an on-disk per-issue workspace.
-// SPEC §4.2 / §9.1 want workspaces keyed by sanitized issue identifier;
-// today the Manager keys them by task ID (deviation D13, tracked under
-// #87). The rekey lands separately; until then Key holds whatever the
-// workspace.Manager produced and CreatedNow tells reconciliation
-// whether this run created the directory or reused an existing one.
+// Path is the exact manager-produced location captured at dispatch, and Root
+// preserves the containment authority used by later cleanup.
 type Workspace struct {
 	Path string
 	// Root is the workspace root the Path was created under, captured at
