@@ -1,93 +1,42 @@
 # Symphony integration
 
 `aiops-platform` is a Go implementation of the OpenAI Symphony SPEC for a
-personal productivity loop.
+personal-productivity coding loop.
 
-## Goal
+## Stable ownership boundary
 
-Keep the Go implementation aligned with `SPEC.md` while supporting local
-Gitea, Linear, and custom workflow needs. `DEVIATIONS.md` tracks the D1–D24
-closure backlog.
-
-## Architecture
+The worker is a scheduler/runner and tracker reader. It polls and reconciles
+tracker state, dispatches eligible issues, prepares deterministic workspaces,
+resolves the repository's `WORKFLOW.md`, and invokes the configured runner.
 
 ```text
-Linear or Gitea tracker poll
-  -> in-memory scheduler/runtime
-  -> deterministic workspace
-  -> WORKFLOW.md
+tracker issue
+  -> worker poll + reconcile + dispatch
+  -> deterministic workspace + WORKFLOW.md
   -> runner
-  -> verification
-  -> agent-side branch push + pull request handoff
+  -> coding agent
+  -> agent-owned verify + branch push + PR + tracker write-back
 ```
 
-## Mapping
+The coding agent owns source changes and the irreversible handoff steps. The
+worker may expose authenticated runtime tools without exposing their tokens, but
+it does not decide or perform agent-side tracker mutations, pushes, or pull
+requests. Verification instructions belong in the workflow prompt and are run
+by the agent before handoff; there is no worker-owned post-turn verification
+phase.
 
-| Symphony concept | aiops-platform module |
-|---|---|
-| Issue tracker | `internal/tracker` |
-| Workflow contract | `internal/workflow` and `WORKFLOW.md` |
-| Workspace manager | `internal/workspace` |
-| Agent runner | `internal/runner` |
-| Runtime state | in-process orchestrator state with tracker/filesystem restart recovery |
-| Git handoff | agent via dynamic tool / CLI (`internal/gitea` backs the tool implementation) |
+## Current authorities
 
-## Usage model
+This page intentionally does not copy feature inventories or deviation status.
+Use the maintained sources instead:
 
-Start with the mock runner:
-
-```yaml
-agent:
-  default: mock
-```
-
-After the queue, workspace, and agent-side branch/PR handoff loop works, switch personal projects to:
-
-```yaml
-agent:
-  default: codex-app-server
-```
-
-For company repositories, keep human review in the loop and prefer draft pull requests.
-
-## Current scope
-
-Implemented:
-
-- Gitea label polling trigger
-- Linear polling trigger
-- GitHub issue polling trigger (`tracker.kind: github`, wired through
-  `cmd/worker` and `internal/tracker/github.go`)
-- repo-owned `WORKFLOW.md` in the service/repository root (single canonical path; see `DEVIATIONS.md` D4 closure)
-- mock, codex-app-server, and claude runner abstraction
-- deterministic local workspace keyed by sanitized source issue identifier (`source_type` + `source_event_id`), so reruns for the same issue reuse the same path while receiving a fresh checkout
-- prompt-scoped path guidance (advisory; repository controls enforce what lands)
-- verification commands
-- `linear_graphql` dynamic tool advertisement and invocation for Codex app-server sessions, proxying Linear GraphQL through orchestrator-held auth without exposing the Linear token to the agent process
-
-Not yet implemented:
-
-- remaining app-server protocol gaps not covered by `linear_graphql`, as tracked in `DEVIATIONS.md`
-- pull request labels and reviewers
-- per-tick reconciliation (#78); startup reconciliation is already closed in #68
-- dashboard
-- robust event streaming
-- sandbox backend coverage beyond the current optional runner enforcement
-
-## Deviations from SPEC
-
-Tracked centrally in [`DEVIATIONS.md`](../DEVIATIONS.md). Deliberate extensions
-beyond the SPEC are scoped narrowly and listed there per deviation. Closed
-historical deviations — for example multi-path `WORKFLOW.md` discovery (D4,
-#72), Gitea webhook ingress (D7, #74), and orchestrator-side PR / push /
-Linear writes (D8, #76) — are no longer in the codebase; legacy alternate
-workflow paths are not searched or reported as shadow sources.
-
-## Pointers
-
-- Symphony's Codex integration uses the long-running `codex app-server`
-  JSON-RPC protocol (`elixir/lib/symphony_elixir/codex/app_server.ex`) and
-  exposes per-turn sandbox overrides via `Codex.changeset`
-  (`elixir/lib/symphony_elixir/config/schema.ex`). This platform now has a
-  Codex app-server runner path; remaining protocol/runtime gaps stay tracked in
-  `DEVIATIONS.md` until their rows close.
+- [README](../README.md) — current product surface, usage, and configuration.
+- [Symphony SPEC mirror](research/SPEC.md) — authoritative protocol contract;
+  the upstream Elixir implementation resolves ambiguity.
+- [Architecture overview](architecture.md) — current runtime flow and package
+  boundaries.
+- [ADR 0001](adr/0001-symphony-style-personal-orchestrator.md) and the
+  [engineering-rules rationale](engineering-rules-rationale.md) — design and
+  harness decisions with provenance.
+- [Deviation ledger](../DEVIATIONS.md) — current SPEC differences and their
+  tracked status.
