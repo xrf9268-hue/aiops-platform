@@ -141,34 +141,31 @@ func fetchReconcileIssues(ctx context.Context, cfg ReconcileConfig, taskID strin
 	return fetch, false
 }
 
-// reconcileIndex is the per-workspace lookup state derived from the fetched
-// issues: active/terminal key maps and the issues used to match historical
-// rework workspace keys.
+// reconcileIndex is the per-workspace lookup state derived from fetched
+// issues. Each issue contributes exactly the key dispatch uses; historical
+// unhashed aliases remain unknown so reconciliation cannot target the wrong
+// workspace after a collision-resistant-key cutover.
 type reconcileIndex struct {
-	activeKeys     map[string]tracker.Issue
-	terminalKeys   map[string]tracker.Issue
-	activeIssues   []tracker.Issue
-	terminalIssues []tracker.Issue
+	activeKeys   map[string]tracker.Issue
+	terminalKeys map[string]tracker.Issue
 }
 
 func newReconcileIndex(fetch reconcileFetch) reconcileIndex {
 	activeKeys := make(map[string]tracker.Issue, len(fetch.activeIssues))
 	for _, issue := range fetch.activeIssues {
-		for _, key := range issueWorkspaceKeys(issue) {
+		if key := issueWorkspaceKey(issue); key != "" {
 			activeKeys[key] = issue
 		}
 	}
 	terminalKeys := make(map[string]tracker.Issue, len(fetch.terminalIssues))
 	for _, issue := range fetch.terminalIssues {
-		for _, key := range issueWorkspaceKeys(issue) {
+		if key := issueWorkspaceKey(issue); key != "" {
 			terminalKeys[key] = issue
 		}
 	}
 	return reconcileIndex{
-		activeKeys:     activeKeys,
-		terminalKeys:   terminalKeys,
-		activeIssues:   fetch.activeIssues,
-		terminalIssues: fetch.terminalIssues,
+		activeKeys:   activeKeys,
+		terminalKeys: terminalKeys,
 	}
 }
 
@@ -196,8 +193,8 @@ func reconcileWorkspaces(ctx context.Context, cfg ReconcileConfig, taskID string
 
 // reconcileWorkspace classifies a single workspace and keeps or removes it,
 // returning whether it was removed and/or kept (both false when removal was
-// declined). Mirrors SPEC §8.6: keep active (exact key or rework), remove a
-// tracker-confirmed terminal workspace, and keep unmatched workspaces.
+// declined). Mirrors SPEC §8.6: keep active exact keys, remove a
+// tracker-confirmed terminal exact key, and keep unmatched workspaces.
 func reconcileWorkspace(ctx context.Context, cfg ReconcileConfig, taskID string, workspace issueWorkspace, idx reconcileIndex) (removedOne, keptOne bool, err error) {
 	if _, ok := idx.activeKeys[workspace.Key]; ok {
 		Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept active workspace", map[string]any{
@@ -208,22 +205,7 @@ func reconcileWorkspace(ctx context.Context, cfg ReconcileConfig, taskID string,
 		})
 		return false, true, nil
 	}
-	if activeIssue, ok := activeReworkIssueForWorkspace(workspace.Key, idx.activeIssues); ok {
-		Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept active workspace", map[string]any{
-			"path":       workspace.Path,
-			"key":        workspace.Key,
-			"issue_id":   activeIssue.ID,
-			"identifier": activeIssue.Identifier,
-			"action":     "keep",
-			"reason":     "active_rework",
-		})
-		return false, true, nil
-	}
 	if issue, ok := idx.terminalKeys[workspace.Key]; ok {
-		removedOne, err = removeWorkspace(ctx, cfg, taskID, workspace.Path, issue, "terminal")
-		return removedOne, false, err
-	}
-	if issue, ok := terminalReworkIssueForWorkspace(workspace.Key, idx.terminalIssues); ok {
 		removedOne, err = removeWorkspace(ctx, cfg, taskID, workspace.Path, issue, "terminal")
 		return removedOne, false, err
 	}
@@ -443,87 +425,6 @@ func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorksp
 	return true, nil
 }
 
-func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) (tracker.Issue, bool) {
-	for _, issue := range issues {
-		if !strings.EqualFold(issue.State, "Rework") {
-			continue
-		}
-		if reworkWorkspaceMatchesIssue(workspaceKey, issue) {
-			return issue, true
-		}
-	}
-	return tracker.Issue{}, false
-}
-
-func terminalReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) (tracker.Issue, bool) {
-	for _, issue := range issues {
-		if reworkWorkspaceMatchesIssue(workspaceKey, issue) {
-			return issue, true
-		}
-	}
-	return tracker.Issue{}, false
-}
-
-func reworkWorkspaceMatchesIssue(workspaceKey string, issue tracker.Issue) bool {
-	for _, prefix := range reworkWorkspaceKeyPrefixes(issue) {
-		if strings.HasPrefix(workspaceKey, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func reworkWorkspaceKeyPrefixes(issue tracker.Issue) []string { //nolint:gocognit // baseline (#521)
-	if strings.TrimSpace(issue.ID) == "" {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	var prefixes []string
-	baseKeys := []string{workspace.SanitizeComponent(issue.ID), sanitizeLegacyWorkspaceKey(issue.ID)}
-	for _, key := range issueWorkspaceKeys(issue) {
-		if base, ok := strings.CutSuffix(key, "-rework-"+workspace.SanitizeComponent(tracker.TimeString(issue.UpdatedAt))); ok {
-			baseKeys = append(baseKeys, base)
-		}
-		if base, ok := strings.CutSuffix(key, "_rework_"+sanitizeLegacyWorkspaceKey(tracker.TimeString(issue.UpdatedAt))); ok {
-			baseKeys = append(baseKeys, base)
-		}
-	}
-	for _, key := range baseKeys {
-		if key == "" {
-			continue
-		}
-		// Emit two prefix forms so reconciliation recognizes Rework
-		// workspaces from every sanitizer vintage that aiops-platform
-		// has shipped:
-		//   1. `<base>_rework_…` — current SPEC §4.2 sanitizer, which
-		//      maps `|` and `:` to `_` and preserves case.
-		//   2. `<base>-rework-…` — interim/pre-#229 layout where the base
-		//      was already case-preserved (or already lowercase) and the
-		//      rework separator was the dash form left over from an
-		//      earlier `_rework_`/`-rework-` split.
-		// #679 removed a speculative third `<lowercased-base>-rework-…`
-		// form (the pre-#229 sanitizer lowercased the key): for the Linear,
-		// Gitea, and GitHub trackers shipped today the Rework key is
-		// composed from `issue.ID` — an all-lowercase UUID or numeric value
-		// — so form 2 already covers every directory shape any released
-		// worker actually wrote to disk, and form 3 never matched a real
-		// directory. Re-add it only when a tracker actually emits an
-		// `issue.ID` with uppercase or `[^a-zA-Z0-9._-]` characters (an
-		// earned rule with a real failure behind it).
-		for _, prefix := range []string{
-			key + "_rework_",
-			key + "-rework-",
-		} {
-			if _, ok := seen[prefix]; ok {
-				continue
-			}
-			seen[prefix] = struct{}{}
-			prefixes = append(prefixes, prefix)
-		}
-	}
-	return prefixes
-}
-
 func nonEmptyStates(states []string) []string {
 	out := make([]string, 0, len(states))
 	for _, state := range states {
@@ -535,56 +436,15 @@ func nonEmptyStates(states []string) []string {
 	return out
 }
 
-func issueWorkspaceKeys(issue tracker.Issue) []string {
-	return workspaceKeysForRawIssueKeys(issue, []string{issue.Identifier, issue.ID})
-}
-
-func workspaceKeysForRawIssueKeys(issue tracker.Issue, rawKeys []string) []string { //nolint:gocognit // baseline (#521)
-	seen := map[string]struct{}{}
-	var keys []string
-	if strings.EqualFold(issue.State, "Rework") && issue.ID != "" && !issue.UpdatedAt.IsZero() {
-		baseKeys := append([]string(nil), rawKeys...)
-		for _, raw := range baseKeys {
-			if strings.TrimSpace(raw) != "" {
-				rawKeys = append(rawKeys, raw+"|rework|"+tracker.TimeString(issue.UpdatedAt))
-			}
-		}
+func issueWorkspaceKey(issue tracker.Issue) string {
+	identifier := issue.Identifier
+	if identifier == "" {
+		identifier = issue.ID
 	}
-	for _, raw := range rawKeys {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		for _, key := range []string{workspace.SanitizeComponent(raw), sanitizeLegacyWorkspaceKey(raw)} {
-			if key == "" {
-				continue
-			}
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			keys = append(keys, key)
-		}
+	if identifier == "" {
+		return ""
 	}
-	return keys
-}
-
-func sanitizeLegacyWorkspaceKey(s string) string { //nolint:gocognit // baseline (#521)
-	var b strings.Builder
-	for _, r := range strings.TrimSpace(s) {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
-		}
-		if b.Len() >= 120 {
-			break
-		}
-	}
-	out := strings.Trim(b.String(), "._-")
-	if out == "" {
-		return "workspace"
-	}
-	return out
+	return workspace.IssueWorkspaceKey(identifier)
 }
 
 // LogEventEmitter records reconciliation events to the process log. Startup

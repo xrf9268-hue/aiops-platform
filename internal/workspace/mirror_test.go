@@ -1646,7 +1646,7 @@ func TestIsForeignRootHolder(t *testing.T) {
 	}
 }
 
-func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
+func TestPathForUsesCollisionResistantIssueIdentifier(t *testing.T) {
 	mgr := &Manager{Root: "/workspaces"}
 
 	first := makeTask("tsk-first", "file:///tmp/repo.git")
@@ -1655,13 +1655,13 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	second.ID = "tsk-second"
 	second.WorkBranch = "ai/tsk-second"
 
-	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear_issue", "Issue_ABC_123__Needs_Fix"); got != want {
+	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear_issue", IssueWorkspaceKey(first.SourceEventID)); got != want {
 		t.Fatalf("PathFor() = %q, want %q", got, want)
 	}
 
 	unsafeSource := first
 	unsafeSource.SourceType = "../Linear Issue//Needs_Safety"
-	if got, want := mgr.PathFor(unsafeSource), filepath.Join("/workspaces", "acme", "demo", ".._Linear_Issue__Needs_Safety", "Issue_ABC_123__Needs_Fix"); got != want {
+	if got, want := mgr.PathFor(unsafeSource), filepath.Join("/workspaces", "acme", "demo", ".._Linear_Issue__Needs_Safety", IssueWorkspaceKey(first.SourceEventID)); got != want {
 		t.Fatalf("PathFor() unsafe source type = %q, want %q", got, want)
 	}
 	if clean := filepath.Clean(mgr.PathFor(unsafeSource)); !strings.HasPrefix(clean, "/workspaces/") {
@@ -1675,6 +1675,11 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	}
 	if got := mgr.PathFor(second); got != mgr.PathFor(first) {
 		t.Fatalf("same source issue used different paths: %q vs %q", got, mgr.PathFor(first))
+	}
+	spaced := first
+	spaced.SourceEventID = " " + first.SourceEventID + " "
+	if got := mgr.PathFor(spaced); got == mgr.PathFor(first) {
+		t.Fatalf("exact identifiers %q and %q collapsed after trimming to %q", spaced.SourceEventID, first.SourceEventID, got)
 	}
 
 	other := first

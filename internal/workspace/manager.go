@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -69,7 +70,12 @@ func (e *HookError) Unwrap() error {
 // allocation that happens when the output is later written as an artifact.
 const VerifyOutputCap = 1 << 20 // 1 MiB
 
-const maxSanitizedLength = 120
+const (
+	maxSanitizedLength            = 120
+	issueWorkspaceHashLength      = 16
+	issueWorkspaceSuffixLength    = len("--") + issueWorkspaceHashLength
+	maxIssueWorkspacePrefixLength = maxSanitizedLength - issueWorkspaceSuffixLength
+)
 
 // cappedBuffer is an io.Writer that buffers up to Cap bytes and silently
 // drops the rest while remembering how many bytes were dropped. It avoids
@@ -148,11 +154,11 @@ func (m *Manager) PathFor(t task.Task) string {
 
 func issueWorkspaceKey(t task.Task) string {
 	sourceType := strings.TrimSpace(t.SourceType)
-	sourceEventID := strings.TrimSpace(t.SourceEventID)
+	sourceEventID := t.SourceEventID
 	if sourceType != "" && sourceEventID != "" {
-		return filepath.Join(SanitizeComponent(sourceType), SanitizeComponent(sourceEventID))
+		return filepath.Join(SanitizeComponent(sourceType), IssueWorkspaceKey(sourceEventID))
 	}
-	return SanitizeComponent(t.ID)
+	return IssueWorkspaceKey(t.ID)
 }
 
 // PrepareGitWorkspace materialises a per-issue workspace as a worktree off
@@ -661,6 +667,23 @@ func sameRealPath(commonDir, workdir, want string) bool {
 // empty string — to "unknown" so PathFor never emits a traversal segment.
 func SanitizeComponent(s string) string {
 	return sanitizeComponent(s)
+}
+
+// IssueWorkspaceKey returns the collision-resistant SPEC §4.2 directory name
+// for an exact issue identifier. Safe identifiers within the component limit
+// remain unchanged. Replacement, filesystem fallback, or truncation reserves
+// room for "--" plus the first 64 bits of the original identifier's SHA-256.
+func IssueWorkspaceKey(identifier string) string {
+	sanitized := sanitizeComponent(identifier)
+	if sanitized == identifier {
+		return sanitized
+	}
+	prefix := []rune(sanitized)
+	if len(prefix) > maxIssueWorkspacePrefixLength {
+		prefix = prefix[:maxIssueWorkspacePrefixLength]
+	}
+	hash := sha256.Sum256([]byte(identifier))
+	return fmt.Sprintf("%s--%x", string(prefix), hash[:issueWorkspaceHashLength/2])
 }
 
 func sanitizeComponent(s string) string {

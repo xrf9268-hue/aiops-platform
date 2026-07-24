@@ -190,58 +190,40 @@ func TestReconcileStartupRemovesOnlyTrackerConfirmedTerminalWorkspace(t *testing
 	}
 }
 
-func TestReconcileStartupRemovesTrackerConfirmedTerminalReworkWorkspaces(t *testing.T) {
-	tests := []struct {
-		name         string
-		key          string
-		unmatchedKey string
-	}{
-		{
-			name:         "current sanitizer",
-			key:          "issue-2_rework_2026-05-16T10_00_00Z",
-			unmatchedKey: "issue-404_rework_2026-05-16T10_00_00Z",
-		},
-		{
-			name:         "legacy sanitizer",
-			key:          "issue-2-rework-2026-05-16t10-00-00z",
-			unmatchedKey: "issue-404-rework-2026-05-16t10-00-00z",
-		},
+func TestReconcileStartupDoesNotAliasPreHashWorkspaceKeys(t *testing.T) {
+	root := t.TempDir()
+	currentPath := filepath.Join(root, "acme", "repo", "linear_issue", workspace.IssueWorkspaceKey("team/a-1"))
+	preHashPath := filepath.Join(root, "acme", "repo", "linear_issue", "team_a-1")
+	historicalReworkPath := filepath.Join(root, "acme", "repo", "linear_issue", "issue-2_rework_2026-05-16T10_00_00Z")
+	for _, path := range []string{currentPath, preHashPath, historicalReworkPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			terminalPath := filepath.Join(root, "acme", "repo", "linear_issue", tt.key)
-			unmatchedPath := filepath.Join(root, "acme", "repo", "linear_issue", tt.unmatchedKey)
-			for _, path := range []string{terminalPath, unmatchedPath} {
-				if err := os.MkdirAll(path, 0o755); err != nil {
-					t.Fatalf("mkdir %s: %v", path, err)
-				}
-			}
 
-			emitter := &fakeEmitter{}
-			err := ReconcileStartup(context.Background(), ReconcileConfig{
-				WorkspaceRoot:  root,
-				ActiveStates:   []string{"Rework"},
-				TerminalStates: []string{"Done"},
-				Tracker: &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
-					nil,
-					{{ID: "issue-2", Identifier: "LIN-2", State: "Done"}},
-				}},
-				Emitter:         emitter,
-				ReconcileTaskID: "reconcile-startup",
-			})
-			if err != nil {
-				t.Fatalf("ReconcileStartup: %v", err)
-			}
-			if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
-				t.Fatalf("tracker-confirmed terminal Rework workspace should be removed, stat err=%v", err)
-			}
-			if _, err := os.Stat(unmatchedPath); err != nil {
-				t.Fatalf("unmatched Rework workspace should remain: %v", err)
-			}
-			wantReconcileWorkspaceReasonForPath(t, emitter, terminalPath, "terminal")
-			wantReconcileWorkspaceReasonForPath(t, emitter, unmatchedPath, "unknown_terminal_state_unconfirmed")
-		})
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+		Tracker: &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
+			nil,
+			{{ID: "issue-2", Identifier: "team/a-1", State: "Done"}},
+		}},
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(currentPath); !os.IsNotExist(err) {
+		t.Fatalf("current collision-resistant workspace should be removed, stat err=%v", err)
+	}
+	for _, path := range []string{preHashPath, historicalReworkPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("pre-cutover workspace %s should remain unmatched: %v", path, err)
+		}
+		wantReconcileWorkspaceReasonForPath(t, emitter, path, "unknown_terminal_state_unconfirmed")
 	}
 }
 
@@ -554,13 +536,9 @@ func TestReconcileStartupTolerantOfBothFetchFailures(t *testing.T) {
 
 func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 	root := t.TempDir()
-	// Workspace dir names follow SPEC §4.2 sanitization: case preserved,
-	// `_` substituted for any character outside [A-Za-z0-9._-]. The rework
-	// key adds a `|rework|<updatedAt>` segment before sanitization, which
-	// turns into `_rework_<sanitized timestamp>`.
-	activePath := filepath.Join(root, "acme", "repo", "linear-issue", "LIN_1_Needs_Fix")
-	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3_rework_2026-05-16T10_00_00Z")
-	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "LIN_2_Done")
+	activePath := filepath.Join(root, "acme", "repo", "linear-issue", workspace.IssueWorkspaceKey("LIN 1 Needs/Fix"))
+	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", workspace.IssueWorkspaceKey("LIN-3"))
+	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", workspace.IssueWorkspaceKey("LIN 2 Done"))
 	for _, path := range []string{activePath, reworkPath, terminalPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
@@ -586,7 +564,7 @@ func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 		t.Fatalf("active workspace in current layout should remain: %v", err)
 	}
 	if _, err := os.Stat(reworkPath); err != nil {
-		t.Fatalf("active Rework workspace in current source_event_id layout should remain: %v", err)
+		t.Fatalf("active Rework workspace in current identifier layout should remain: %v", err)
 	}
 	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
 		t.Fatalf("terminal workspace in current layout should be removed, stat err=%v", err)
@@ -595,8 +573,8 @@ func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 
 func TestReconcileStartupMatchesGiteaWorkspaceLayout(t *testing.T) {
 	root := t.TempDir()
-	activePath := filepath.Join(root, "acme", "repo", "gitea_issue", "issue-1")
-	terminalPath := filepath.Join(root, "acme", "repo", "gitea_issue", "issue-2")
+	activePath := filepath.Join(root, "acme", "repo", "gitea_issue", workspace.IssueWorkspaceKey("GIT-1"))
+	terminalPath := filepath.Join(root, "acme", "repo", "gitea_issue", workspace.IssueWorkspaceKey("GIT-2"))
 	for _, path := range []string{activePath, terminalPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
@@ -628,8 +606,8 @@ func TestReconcileStartupMatchesGiteaWorkspaceLayout(t *testing.T) {
 
 func TestReconcileStartupMatchesGitHubWorkspaceLayout(t *testing.T) {
 	root := t.TempDir()
-	activePath := filepath.Join(root, "acme", "repo", "github_issue", "issue-1")
-	terminalPath := filepath.Join(root, "acme", "repo", "github_issue", "issue-2")
+	activePath := filepath.Join(root, "acme", "repo", "github_issue", workspace.IssueWorkspaceKey("#1"))
+	terminalPath := filepath.Join(root, "acme", "repo", "github_issue", workspace.IssueWorkspaceKey("#2"))
 	for _, path := range []string{activePath, terminalPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
@@ -661,7 +639,7 @@ func TestReconcileStartupMatchesGitHubWorkspaceLayout(t *testing.T) {
 
 func TestReconcileStartupSkipsOtherTrackerWorkspaceLayouts(t *testing.T) {
 	root := t.TempDir()
-	linearTerminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-2")
+	linearTerminalPath := filepath.Join(root, "acme", "repo", "linear-issue", workspace.IssueWorkspaceKey("LIN 2 Done"))
 	giteaOtherTrackerPath := filepath.Join(root, "acme", "repo", "gitea_issue", "issue-owned-by-gitea-worker")
 	for _, path := range []string{linearTerminalPath, giteaOtherTrackerPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
@@ -687,150 +665,6 @@ func TestReconcileStartupSkipsOtherTrackerWorkspaceLayouts(t *testing.T) {
 	if _, err := os.Stat(giteaOtherTrackerPath); err != nil {
 		t.Fatalf("gitea workspace should be ignored by linear reconciliation: %v", err)
 	}
-}
-
-func TestReconcileStartupKeepsReworkWorkspaceWhenUpdatedAtChanged(t *testing.T) {
-	root := t.TempDir()
-	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")
-	if err := os.MkdirAll(reworkPath, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	err := ReconcileStartup(context.Background(), ReconcileConfig{
-		WorkspaceRoot:  root,
-		ActiveStates:   []string{"Rework"},
-		TerminalStates: []string{"Done"},
-		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
-			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: mustTime("2026-05-16T11:30:00Z")},
-			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
-		}},
-		Emitter:         &fakeEmitter{},
-		ReconcileTaskID: "reconcile-startup",
-	})
-	if err != nil {
-		t.Fatalf("ReconcileStartup: %v", err)
-	}
-	if _, err := os.Stat(reworkPath); err != nil {
-		t.Fatalf("active Rework workspace should remain even when issue updatedAt changed: %v", err)
-	}
-}
-
-func TestReconcileStartupKeepsReworkWorkspaceWithLegacyOffsetTimestampSuffix(t *testing.T) {
-	root := t.TempDir()
-	legacyOffsetPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-08t12-30-00-02-00")
-	if err := os.MkdirAll(legacyOffsetPath, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	err := ReconcileStartup(context.Background(), ReconcileConfig{
-		WorkspaceRoot:  root,
-		ActiveStates:   []string{"Rework"},
-		TerminalStates: []string{"Done"},
-		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
-			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: mustTime("2026-05-08T12:30:00+02:00")},
-		}},
-		Emitter:         &fakeEmitter{},
-		ReconcileTaskID: "reconcile-startup",
-	})
-	if err != nil {
-		t.Fatalf("ReconcileStartup: %v", err)
-	}
-	if _, err := os.Stat(legacyOffsetPath); err != nil {
-		t.Fatalf("active Rework workspace with legacy offset timestamp suffix should remain: %v", err)
-	}
-}
-
-func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *testing.T) {
-	issue := tracker.Issue{ID: "issue-3", State: "Rework", UpdatedAt: mustTime("2026-05-08T12:30:00+02:00")}
-
-	// reworkWorkspaceKeyPrefixes emits two prefix forms so reconciliation
-	// matches workspaces from every aiops-platform sanitizer vintage on disk:
-	// the canonical SPEC §4.2 `_rework_` and the interim/pre-#229 case-preserved
-	// `-rework-`. (#679 removed the speculative lowercased-base third form; for
-	// an all-lowercase ID like "issue-3" it was always a duplicate of form 2.)
-	got := reworkWorkspaceKeyPrefixes(issue)
-	want := []string{"issue-3_rework_", "issue-3-rework-"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, want %#v", got, want)
-	}
-}
-
-// TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace pins the
-// migration promise made in PR #290 / issue #229: a Rework workspace
-// created by the pre-#229 sanitizer (lowercased input, `-` separators
-// throughout, lowercased timestamp) must still be classified as
-// `active_rework` on the first reconcile after the upgrade, instead of
-// being misclassified when the terminal fetch also returns issues. The shipped
-// trackers' Rework key is the
-// all-lowercase `issue.ID`, so the case-preserving form 2 (`<id>-rework-`)
-// matches the on-disk directory — this is exactly why #679 could drop the
-// speculative lowercased-base third form without regressing the promise.
-func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
-	root := t.TempDir()
-	// Pre-#229 actual on-disk shape for a Linear Rework workspace, mirroring
-	// what the pre-#229 sanitizer would have written
-	// for `SourceEventID = "<issue.ID>|rework|<updatedAt>"`:
-	//   - source-type subdir is `linear_issue` (pre-#229 `SanitizeSourceType`
-	//     preserved `_`),
-	//   - workspace key is `<issue.ID>-rework-<lowercased-timestamp>`
-	//     (pre-#229 `SanitizeComponent` lowercased and collapsed `|` / `:`
-	//     into `-`).
-	preSpecPath := filepath.Join(root, "acme", "repo", "linear_issue", "issue-3-rework-2026-05-16t10-00-00z")
-	if err := os.MkdirAll(preSpecPath, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	emitter := &fakeEmitter{}
-	err := ReconcileStartup(context.Background(), ReconcileConfig{
-		WorkspaceRoot:  root,
-		ActiveStates:   []string{"Rework"},
-		TerminalStates: []string{"Done"},
-		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
-			{ID: "issue-3", Identifier: "LIN-123", State: "Rework", UpdatedAt: mustTime("2026-05-16T11:30:00Z")},
-			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
-		}},
-		Emitter:         emitter,
-		ReconcileTaskID: "reconcile-startup",
-	})
-	if err != nil {
-		t.Fatalf("ReconcileStartup: %v", err)
-	}
-	if _, err := os.Stat(preSpecPath); err != nil {
-		t.Fatalf("pre-#229 Rework workspace should remain after the SPEC §4.2 cutover: %v", err)
-	}
-	wantSingleReconcileWorkspaceReason(t, emitter, "active_rework")
-}
-
-// TestReworkWorkspaceKeyPrefixesOmitsPreSpecLowercaseForm pins #679: the
-// speculative pre-#229 lowercased-base `-rework-` form is no longer emitted, so
-// even an uppercase Identifier yields only the case-preserving SPEC and interim
-// forms. Form 2 already covers every shipped tracker, whose Rework key is built
-// from an all-lowercase `issue.ID`.
-func TestReworkWorkspaceKeyPrefixesOmitsPreSpecLowercaseForm(t *testing.T) {
-	issue := tracker.Issue{ID: "issue-3", Identifier: "LIN-123", State: "Rework", UpdatedAt: mustTime("2026-05-16T10:00:00Z")}
-
-	got := reworkWorkspaceKeyPrefixes(issue)
-	for _, want := range []string{
-		"LIN-123_rework_", // SPEC §4.2 form
-		"LIN-123-rework-", // interim dash form
-		"issue-3_rework_", // SPEC form for ID
-		"issue-3-rework-", // interim form for ID
-	} {
-		if !containsStringWorker(got, want) {
-			t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, missing %q", got, want)
-		}
-	}
-	if containsStringWorker(got, "lin-123-rework-") {
-		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, must not emit the removed pre-#229 lowercased form %q", got, "lin-123-rework-")
-	}
-}
-
-func containsStringWorker(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestReconcileStartupRunsBeforeRemoveHookAndStillRemovesOnFailure(t *testing.T) {
@@ -957,9 +791,10 @@ func TestReconcileStartupRejectsEmptyTerminalStatesBeforeCleanup(t *testing.T) {
 
 func TestReconcileStartupHandlesSourceEventIDAndTaskIDWorkspaceLayouts(t *testing.T) {
 	root := t.TempDir()
-	linearPath := filepath.Join(root, "acme", "repo", "linear_issue", "issue-uuid")
+	linearPath := filepath.Join(root, "acme", "repo", "linear_issue", workspace.IssueWorkspaceKey("LIN-123"))
+	idAliasPath := filepath.Join(root, "acme", "repo", "linear_issue", "issue-uuid")
 	legacyTaskPath := filepath.Join(root, "acme", "repo", "tsk_123")
-	for _, path := range []string{linearPath, legacyTaskPath} {
+	for _, path := range []string{linearPath, idAliasPath, legacyTaskPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
 		}
@@ -979,15 +814,16 @@ func TestReconcileStartupHandlesSourceEventIDAndTaskIDWorkspaceLayouts(t *testin
 	if _, err := os.Stat(linearPath); !os.IsNotExist(err) {
 		t.Fatalf("linear_issue/source_event_id workspace should be removed, stat err=%v", err)
 	}
-	if _, err := os.Stat(legacyTaskPath); err != nil {
-		t.Fatalf("task-id workspace should be ignored by reconciliation: %v", err)
+	for _, path := range []string{idAliasPath, legacyTaskPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("task-id alias workspace %s should be ignored by reconciliation: %v", path, err)
+		}
 	}
 }
 
 func TestReconcileStartupKeepsWorkspaceWhenActiveAndTerminalKeysConflict(t *testing.T) {
 	root := t.TempDir()
-	// SPEC §4.2 sanitization of "same key" → "same_key" (space → `_`).
-	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", "same_key")
+	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", workspace.IssueWorkspaceKey("same key"))
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -1016,7 +852,7 @@ func TestReconcileStartupKeepsWorkspaceWhenActiveAndTerminalKeysConflict(t *test
 
 func TestReconcileStartupKeepsActiveReworkWhenTerminalSnapshotConflicts(t *testing.T) {
 	root := t.TempDir()
-	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3_rework_2026-05-16T10_00_00Z")
+	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", workspace.IssueWorkspaceKey("LIN-3"))
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -1040,7 +876,7 @@ func TestReconcileStartupKeepsActiveReworkWhenTerminalSnapshotConflicts(t *testi
 	if _, err := os.Stat(workspacePath); err != nil {
 		t.Fatalf("conflicting active Rework workspace should remain: %v", err)
 	}
-	wantSingleReconcileWorkspaceReason(t, emitter, "active_rework")
+	wantSingleReconcileWorkspaceReason(t, emitter, "active")
 }
 
 func TestReconcileStartupKeepsUnknownWorkspaceWhenTrackerHasActiveIssuesOnly(t *testing.T) {
@@ -1198,13 +1034,11 @@ func TestReconcileStartupEndPayloadCountsOnTerminalFetchFailure(t *testing.T) {
 	wantPayloadCount(t, payload, "kept", 2) // LIN-1 active + LIN-9 unknown kept (terminal unconfirmed)
 }
 
-// TestReconcileStartupEndPayloadCountsReworkKeep pins the active_rework branch's
-// kept count. The on-disk workspace timestamp differs from the issue's current
-// updatedAt, so it matches via reworkWorkspaceKeyPrefixes (not an exact active
-// key). The terminal result keeps the test representative of a mixed board.
+// TestReconcileStartupEndPayloadCountsReworkKeep pins that Rework uses the
+// same exact identifier key and active classification as every other state.
 func TestReconcileStartupEndPayloadCountsReworkKeep(t *testing.T) {
 	root := t.TempDir()
-	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")
+	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", workspace.IssueWorkspaceKey("LIN-3"))
 	if err := os.MkdirAll(reworkPath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -1224,12 +1058,12 @@ func TestReconcileStartupEndPayloadCountsReworkKeep(t *testing.T) {
 		t.Fatalf("ReconcileStartup: %v", err)
 	}
 	if _, err := os.Stat(reworkPath); err != nil {
-		t.Fatalf("active_rework workspace should remain: %v", err)
+		t.Fatalf("active Rework workspace should remain: %v", err)
 	}
 	payload := reconcileEndPayloadFor(t, emitter)
-	wantPayloadCount(t, payload, "kept", 1) // matched via active_rework prefix branch
+	wantPayloadCount(t, payload, "kept", 1)
 	wantPayloadCount(t, payload, "removed", 0)
-	wantSingleReconcileWorkspaceReason(t, emitter, "active_rework")
+	wantSingleReconcileWorkspaceReason(t, emitter, "active")
 }
 
 func TestRemoveIssueWorkspaceRejectsUnsafePathWithoutRemoveEvent(t *testing.T) {
