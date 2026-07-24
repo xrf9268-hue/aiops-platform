@@ -40,7 +40,7 @@ func TestValidateRemoveDoesNotDeleteValidPath(t *testing.T) {
 		t.Fatalf("mkdir valid path: %v", err)
 	}
 
-	if err := ValidateRemove(root, taskDir); err != nil {
+	if _, err := ValidateRemove(root, taskDir); err != nil {
 		t.Fatalf("ValidateRemove valid path: %v", err)
 	}
 	if _, err := os.Stat(taskDir); err != nil {

@@ -38,16 +38,16 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, identifier, 
 }
 
 func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, identifier, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, cfg workflow.Config, reason string) {
-	if err := workspace.ValidateRemove(workspaceRoot, workdir); err != nil {
+	removal, err := workspace.ValidateRemove(workspaceRoot, workdir)
+	if err != nil {
 		LogTaskIDEventf(taskID, identifier, "workspace_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
 		return
 	}
 	if err := runWorkspaceHook(ctx, ev, taskID, identifier, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough, cfg); err != nil {
 		LogTaskIDEventf(taskID, identifier, "before_remove_hook_failed", "reason=%s error=%q", reason, err)
 	}
-	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
+	if err := removal.Remove(); err != nil {
 		LogTaskIDEventf(taskID, identifier, "workspace_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
-		return
 	}
 	if err := runner.RemoveSandboxGoBuildCache(workdir); err != nil {
 		LogTaskIDEventf(taskID, identifier, "go_build_cache_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)

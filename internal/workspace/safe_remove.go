@@ -18,13 +18,39 @@ var ErrSafeRemoveInvalidPath = errors.New("safe remove: invalid path")
 // symlink whose resolved target points outside the root.
 var ErrSafeRemoveEscapesRoot = errors.New("safe remove: path escapes workspace root")
 
+// ValidatedRemoval carries the canonical root identity established before a
+// cleanup hook. Remove revalidates against that identity so replacing the
+// recorded root during the hook cannot make an external tree the new boundary.
+type ValidatedRemoval struct {
+	root          string
+	path          string
+	canonicalRoot string
+}
+
 // ValidateRemove confirms that path is an absolute, non-empty subdirectory
 // strictly contained under an absolute root without deleting it. Cleanup paths
-// that run hooks must call this before the hook, then still call SafeRemove
-// afterward so a hook-time path or symlink swap is rejected too.
-func ValidateRemove(root, path string) error {
-	_, err := validatedRemovePath(root, path)
-	return err
+// that run hooks must retain the returned guard and call Remove afterward so a
+// hook-time path or root swap is rejected too.
+func ValidateRemove(root, path string) (ValidatedRemoval, error) {
+	return validateRemoval(root, path)
+}
+
+// Remove repeats path validation and refuses removal when the canonical root
+// differs from the identity captured by ValidateRemove.
+func (v ValidatedRemoval) Remove() error {
+	current, err := validateRemoval(v.root, v.path)
+	if err != nil {
+		return err
+	}
+	if current.canonicalRoot != v.canonicalRoot {
+		return fmt.Errorf(
+			"%w: workspace root changed from %s to %s",
+			ErrSafeRemoveEscapesRoot,
+			v.canonicalRoot,
+			current.canonicalRoot,
+		)
+	}
+	return os.RemoveAll(v.path)
 }
 
 // SafeRemove deletes path with `os.RemoveAll` after applying the same checks as
@@ -43,78 +69,80 @@ func ValidateRemove(root, path string) error {
 // cleanup. Containment is checked first so that a non-existent path under root
 // is allowed but a non-existent path outside root is still rejected.
 func SafeRemove(root, path string) error {
-	absPath, err := validatedRemovePath(root, path)
+	removal, err := ValidateRemove(root, path)
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(absPath)
+	return removal.Remove()
 }
 
-func validatedRemovePath(root, path string) (string, error) {
-	absRoot, absPath, err := absoluteRemovePaths(root, path)
-	if err != nil {
-		return "", err
-	}
-	resolvedRoot, err := resolveRemoveRoot(absRoot)
-	if err != nil {
-		return "", err
-	}
-	if err := validateResolvedRemovePath(resolvedRoot, absPath); err != nil {
-		return "", err
-	}
-	return absPath, nil
-}
-
-func absoluteRemovePaths(root, path string) (string, string, error) {
+func validateRemoval(root, path string) (ValidatedRemoval, error) {
 	root = strings.TrimSpace(root)
 	path = strings.TrimSpace(path)
 	if root == "" || path == "" {
-		return "", "", ErrSafeRemoveInvalidPath
+		return ValidatedRemoval{}, ErrSafeRemoveInvalidPath
 	}
 	if !filepath.IsAbs(root) || !filepath.IsAbs(path) {
-		return "", "", fmt.Errorf("%w: root and path must be absolute", ErrSafeRemoveInvalidPath)
+		return ValidatedRemoval{}, fmt.Errorf("%w: root and path must be absolute", ErrSafeRemoveInvalidPath)
 	}
-	absRoot, err := filepath.Abs(root)
+	if hasParentTraversal(root) || hasParentTraversal(path) {
+		return ValidatedRemoval{}, fmt.Errorf("%w: parent traversal is not allowed", ErrSafeRemoveEscapesRoot)
+	}
+	lexicalRoot := filepath.Clean(root)
+	lexicalPath := filepath.Clean(path)
+	if err := assertContained(lexicalRoot, lexicalPath); err != nil {
+		return ValidatedRemoval{}, err
+	}
+	canonicalRoot, err := resolveRemovePath(root)
 	if err != nil {
-		return "", "", fmt.Errorf("safe remove: abs root: %w", err)
+		return ValidatedRemoval{}, err
 	}
-	absRoot = filepath.Clean(absRoot)
-	absPath, err := filepath.Abs(path)
+	canonicalPath, err := resolveRemovePath(path)
 	if err != nil {
-		return "", "", fmt.Errorf("safe remove: abs path: %w", err)
+		return ValidatedRemoval{}, err
 	}
-	absPath = filepath.Clean(absPath)
-	if err := assertContained(absRoot, absPath); err != nil {
-		return "", "", err
+	if err := assertContained(canonicalRoot, canonicalPath); err != nil {
+		return ValidatedRemoval{}, err
 	}
-	return absRoot, absPath, nil
+	return ValidatedRemoval{root: root, path: path, canonicalRoot: canonicalRoot}, nil
 }
 
-func resolveRemoveRoot(absRoot string) (string, error) {
-	// Re-validate after resolving symlinks on both root and path. A directory
-	// symlink under root that points outside (e.g. a stray operator-created
-	// link, or a malicious workspace file) must be rejected even though its
-	// raw `absPath` looks contained. Root is symlink-resolved too so platforms
-	// whose tempdir is itself a symlink (e.g. macOS `/var` → `/private/var`)
-	// don't trip the comparison.
-	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return absRoot, nil
+func resolveRemovePath(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("safe remove: resolve symlinks: %w", err)
+	}
+	info, lstatErr := os.Lstat(path)
+	if lstatErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%w: dangling symlink %s", ErrSafeRemoveEscapesRoot, path)
 		}
-		return "", fmt.Errorf("safe remove: resolve root symlinks: %w", err)
+		return "", fmt.Errorf("safe remove: path changed while resolving %s: %w", path, err)
 	}
-	return filepath.Clean(resolvedRoot), nil
+	if !os.IsNotExist(lstatErr) {
+		return "", fmt.Errorf("safe remove: lstat %s: %w", path, lstatErr)
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return filepath.Clean(path), nil
+	}
+	resolvedParent, err := resolveRemovePath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedParent, filepath.Base(path)), nil
 }
 
-func validateResolvedRemovePath(resolvedRoot, absPath string) error {
-	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
-		return assertContained(resolvedRoot, filepath.Clean(resolved))
-	} else if os.IsNotExist(err) {
-		return nil
-	} else {
-		return fmt.Errorf("safe remove: resolve symlinks: %w", err)
+func hasParentTraversal(path string) bool {
+	for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
+		if segment == ".." {
+			return true
+		}
 	}
+	return false
 }
 
 func assertContained(absRoot, absPath string) error {

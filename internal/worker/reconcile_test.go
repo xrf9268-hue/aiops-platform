@@ -1266,6 +1266,10 @@ func TestRemoveIssueWorkspaceRejectsUnsafePathBeforeHook(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatalf("symlink workspace: %v", err)
 	}
+	dangling := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-10")
+	if err := os.Symlink(filepath.Join(outside, "missing"), dangling); err != nil {
+		t.Fatalf("dangling symlink workspace: %v", err)
+	}
 
 	tests := []struct {
 		name    string
@@ -1277,6 +1281,8 @@ func TestRemoveIssueWorkspaceRejectsUnsafePathBeforeHook(t *testing.T) {
 		{name: "outside", path: outside, wantErr: workspace.ErrSafeRemoveEscapesRoot},
 		{name: "root", path: root, wantErr: workspace.ErrSafeRemoveEscapesRoot},
 		{name: "symlink escape", path: link, wantErr: workspace.ErrSafeRemoveEscapesRoot},
+		{name: "missing leaf below symlink escape", path: filepath.Join(link, "missing"), wantErr: workspace.ErrSafeRemoveEscapesRoot},
+		{name: "dangling symlink escape", path: dangling, wantErr: workspace.ErrSafeRemoveEscapesRoot},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1307,6 +1313,50 @@ func TestRemoveIssueWorkspaceRejectsUnsafePathBeforeHook(t *testing.T) {
 	}
 	if _, err := os.Stat(outside); err != nil {
 		t.Fatalf("outside target must remain: %v", err)
+	}
+	if _, err := os.Lstat(dangling); err != nil {
+		t.Fatalf("dangling symlink must remain: %v", err)
+	}
+}
+
+func TestRemoveIssueWorkspaceRejectsRawSymlinkTraversalBeforeHook(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir outside nested path: %v", err)
+	}
+	outsideTarget := filepath.Join(outside, "target")
+	if err := os.MkdirAll(outsideTarget, 0o755); err != nil {
+		t.Fatalf("mkdir outside target: %v", err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(filepath.Join(outside, "nested"), link); err != nil {
+		t.Fatalf("symlink workspace ancestor: %v", err)
+	}
+	rawPath := link + string(filepath.Separator) + ".." + string(filepath.Separator) + "target"
+	marker := filepath.Join(outsideTarget, "before-remove-ran")
+	emitter := &fakeEmitter{}
+
+	removed, err := RemoveIssueWorkspace(context.Background(), emitter, RemoveWorkspaceRequest{
+		WorkspaceRoot:    root,
+		TaskID:           "reconcile-startup",
+		Path:             rawPath,
+		Reason:           "terminal",
+		BeforeRemoveHook: workflow.WorkspaceHook{Commands: []string{"touch " + shellQuote(marker)}},
+	})
+	if !errors.Is(err, workspace.ErrSafeRemoveEscapesRoot) {
+		t.Fatalf("RemoveIssueWorkspace(%q) error = %v, want ErrSafeRemoveEscapesRoot", rawPath, err)
+	}
+	if removed {
+		t.Fatal("RemoveIssueWorkspace removed = true, want false")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("before_remove marker stat error = %v, want not exist", err)
+	}
+	for _, kind := range []string{task.EventWorkspaceHookStart, task.EventWorkspaceHookEnd, task.EventReconcileWorkspace} {
+		if got := len(emitter.byKind(kind)); got != 0 {
+			t.Fatalf("%s events = %d, want 0", kind, got)
+		}
 	}
 }
 
@@ -1353,6 +1403,92 @@ func TestRemoveIssueWorkspaceRevalidatesPathAfterHook(t *testing.T) {
 	}
 	if got := len(emitter.byKind(task.EventReconcileWorkspace)); got != 0 {
 		t.Fatalf("reconcile_workspace events = %d, want 0", got)
+	}
+}
+
+func TestRemoveIssueWorkspaceRejectsRootSwapAfterHook(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "workspaces")
+	workdir := filepath.Join(root, "LIN-11")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	movedRoot := root + ".moved"
+	outside := t.TempDir()
+	outsideWorkdir := filepath.Join(outside, "LIN-11")
+	if err := os.MkdirAll(outsideWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir outside workspace: %v", err)
+	}
+	sentinel := filepath.Join(outsideWorkdir, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write outside sentinel: %v", err)
+	}
+	emitter := &fakeEmitter{}
+	removed, err := RemoveIssueWorkspace(context.Background(), emitter, RemoveWorkspaceRequest{
+		WorkspaceRoot: root,
+		TaskID:        "reconcile-startup",
+		Path:          workdir,
+		Reason:        "terminal",
+		BeforeRemoveHook: workflow.WorkspaceHook{Commands: []string{
+			"mv " + shellQuote(root) + " " + shellQuote(movedRoot) +
+				" && ln -s " + shellQuote(outside) + " " + shellQuote(root),
+		}},
+	})
+	if !errors.Is(err, workspace.ErrSafeRemoveEscapesRoot) {
+		t.Fatalf("RemoveIssueWorkspace error = %v, want ErrSafeRemoveEscapesRoot", err)
+	}
+	if removed {
+		t.Fatal("RemoveIssueWorkspace removed = true, want false")
+	}
+	if _, err := os.Stat(filepath.Join(movedRoot, "LIN-11")); err != nil {
+		t.Fatalf("recorded workspace must remain after root swap: %v", err)
+	}
+	if body, err := os.ReadFile(sentinel); err != nil || string(body) != "keep" {
+		t.Fatalf("outside sentinel = %q, %v; want untouched", body, err)
+	}
+	if got := len(emitter.byKind(task.EventReconcileWorkspace)); got != 0 {
+		t.Fatalf("reconcile_workspace events = %d, want 0", got)
+	}
+}
+
+func TestRemoveWorkdirAfterHookFailureCleansCacheAfterPostHookRejection(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	root := t.TempDir()
+	workdir := filepath.Join(root, "LIN-12")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	cache := runner.SandboxGoBuildCachePath(workdir)
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatalf("mkdir Go build cache: %v", err)
+	}
+	moved := workdir + ".moved"
+	outside := t.TempDir()
+
+	removeWorkdirAfterHookFailure(
+		context.Background(),
+		&fakeEmitter{},
+		"task-12",
+		"LIN-12",
+		root,
+		workdir,
+		workflow.WorkspaceHook{Commands: []string{
+			"mv " + shellQuote(workdir) + " " + shellQuote(moved) +
+				" && ln -s " + shellQuote(outside) + " " + shellQuote(workdir),
+		}},
+		0,
+		nil,
+		workflow.Config{},
+		"after_create",
+	)
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("Go build cache stat error = %v, want removed after post-hook rejection", err)
+	}
+	if _, err := os.Stat(moved); err != nil {
+		t.Fatalf("moved workspace must remain: %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("outside target must remain: %v", err)
 	}
 }
 
