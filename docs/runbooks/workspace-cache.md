@@ -278,9 +278,9 @@ they are the long-lived cache that keeps worktree re-creation cheap.
 
 ## Cleanup containment invariant
 
-All cleanup paths that delete a per-task worktree go through
-`workspace.SafeRemove(root, path)`. Before any `before_remove` hook,
-the cleanup seam calls the non-mutating
+All cleanup paths that delete a per-task worktree use the workspace
+package's shared validated-removal guard. Before any `before_remove`
+hook, the cleanup seam calls the non-mutating
 `workspace.ValidateRemove(root, path)` and retains its removal guard.
 The guard revalidates the path and the original canonical root identity
 after the hook, so replacing either the path or the root with an

@@ -391,8 +391,8 @@ func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path stri
 }
 
 // RemoveWorkspaceRequest carries the inputs for a single per-issue workspace
-// removal through the shared before_remove → SafeRemove → reconcile_workspace
-// event sequence.
+// removal through the shared validate → before_remove → guarded removal →
+// reconcile_workspace event sequence.
 type RemoveWorkspaceRequest struct {
 	WorkspaceRoot      string
 	TaskID             string
