@@ -309,9 +309,13 @@ shipped.
   `DEVIATIONS.md` row (principle 6/7). Fill the `SPEC alignment` checklist in the
   PR template. This makes a documented deviation cost something *before* merge
   instead of being unwound later (the #73/#74/#76/#557/#561/D25 recurrence). The
-  required-check wiring lives in `.github/governance/main-ruleset.json`. **Earned
-  by:** #588 — those removals all shipped despite the rules existing, because the
-  checks were judgment at audit time rather than mechanical at author time.
+  required-check wiring lives in `.github/governance/main-ruleset.json`.
+  Route new findings through the active ledger named in `DEVIATIONS.md`; a
+  hard-coded historical umbrella silently misfiles later alignment work.
+  **Earned by:** #588 — those removals all shipped despite the rules existing,
+  because the checks were judgment at audit time rather than mechanical at
+  author time; #1138 — #67 covered the historical D1–D24 sweep after the active
+  ledger had moved on.
 - **PR titles are Conventional Commits.** Squash-merge makes the PR title the
   commit subject release-please parses; titles using freeform `area:` prefixes
   (`maintainability:`, `cmd:`, `stateapi:`, `dashboard:`, …) are dropped silently

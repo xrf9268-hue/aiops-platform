@@ -1210,18 +1210,18 @@ func TestNewLinearClient_DefaultsRequestTimeoutTo30s(t *testing.T) {
 	}
 }
 
-// TestNewLinearClientHonorsEndpointOverride pins SPEC §5.3.1 (#242): an
-// explicit `tracker.endpoint` configures the Linear client's BaseURL.
-// Workflows pointing at a httptest mock, a regional Linear endpoint, or a
-// proxy can express the override in WORKFLOW.md without code changes.
-func TestNewLinearClientHonorsEndpointOverride(t *testing.T) {
+// TestNewLinearClientHonorsCurrentEndpointOverride pins the current flat
+// `tracker.endpoint` wiring. D43 / #1144 owns its atomic replacement with
+// adapter-owned `tracker.provider`; the existing behavior remains required
+// until that cutover.
+func TestNewLinearClientHonorsCurrentEndpointOverride(t *testing.T) {
 	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k", Endpoint: "https://linear.example/graphql"})
 	if client.BaseURL != "https://linear.example/graphql" {
 		t.Fatalf("BaseURL = %q, want override from tracker.endpoint", client.BaseURL)
 	}
 }
 
-func TestNewLinearClientDefaultsToSpecEndpoint(t *testing.T) {
+func TestNewLinearClientDefaultsToLinearEndpoint(t *testing.T) {
 	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k"})
 	if client.BaseURL != DefaultLinearEndpoint {
 		t.Fatalf("BaseURL = %q, want DefaultLinearEndpoint when override absent", client.BaseURL)

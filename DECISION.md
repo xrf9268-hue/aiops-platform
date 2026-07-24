@@ -14,6 +14,12 @@
 > record, not a current backlog. Use [`DEVIATIONS.md`](DEVIATIONS.md) for current
 > deviation status and [`docs/architecture.md`](docs/architecture.md) for the
 > current runtime design.
+>
+> **Upstream-status update (2026-07-24).** Upstream resumed development after
+> this decision and is currently audited here at
+> [`653f8b3`](https://github.com/openai/symphony/tree/653f8b3cc476db03420479ba6f95b2ed7281c401).
+> The maintenance assumptions below describe the evidence available on
+> 2026-05-15; they are not the current upstream status.
 
 ## TL;DR
 
@@ -72,12 +78,12 @@ This work happens through AI agents under the operator-as-navigator model
 
 ### 1. "Forking gives day-1 SPEC fidelity" — false framing
 
-`SPEC.md` is the contract, not the `openai/symphony` repo. OpenAI has stated
-the Elixir repo is a reference implementation and will not be maintained as
-a product. Forking it gets us code that one author once interpreted as
-SPEC-aligned — it does not get us SPEC fidelity by construction. Any forked
-code still needs to be audited against `SPEC.md`. The "fork starts at zero
-deviations" claim conflates repo with spec.
+`SPEC.md` is the contract, not the `openai/symphony` repo. At the time, OpenAI
+had stated the Elixir repo was a reference implementation and would not be
+maintained as a product. Forking it gets us code that one author once
+interpreted as SPEC-aligned — it does not get us SPEC fidelity by
+construction. Any forked code still needs to be audited against `SPEC.md`.
+The "fork starts at zero deviations" claim conflates repo with spec.
 
 ### 2. "Verification surface doubles for the human" — invalid under the workflow model
 
@@ -94,10 +100,12 @@ gradient of AI cost, not a hard cap on what is feasible.
 
 ### 3. "Maintenance gradient — upstream changes cost less in a fork" — moot
 
-OpenAI has stated the Elixir repo will not be maintained as a product.
-There are no future upstream changes to inherit by merge. Both paths (Go
-port and Elixir fork) become "we own this code" from day one. The
-gradient flattens to zero.
+At the time of this decision, OpenAI had stated that the Elixir repo would not
+be maintained as a product. The decision therefore assumed future upstream
+changes would not arrive by merge and that both paths (Go port and Elixir
+fork) would become "we own this code" from day one. Upstream later resumed
+development, so this maintenance-gradient premise is historical rather than a
+current project constraint.
 
 ### What is left
 
@@ -119,7 +127,7 @@ gradient flattens to zero.
 
 - Closing D1–D24 against `SPEC.md`, in some order (see Open question).
 - Treating `SPEC.md` as the review target. Where `SPEC.md` is ambiguous,
-  the Elixir [`orchestrator.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/orchestrator.ex)
+  the Elixir [`orchestrator.ex`](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/elixir/lib/symphony_elixir/orchestrator.ex)
   and related modules are the tie-breaking oracle.
 - Refreshing `DEVIATIONS.md` to include D10–D24 alongside D1–D9.
 - Keeping the harness-engineering posture in `AGENTS.md` and applying its

@@ -2276,13 +2276,11 @@ prompt
 	}
 }
 
-// TestDefaultConfig_AlignsToSPEC_6_4 pins every SPEC §6.4 default
-// `DefaultConfig()` is responsible for. Each field gets its own
-// assertion so a regression on any one of them surfaces in CI rather
-// than being papered over by a sibling field's check. Mirrors the
-// Elixir reference (`elixir/lib/symphony_elixir/config/schema.ex`
-// lines 53, 54, 93, 131, 160).
-func TestDefaultConfig_AlignsToSPEC_6_4(t *testing.T) {
+// TestDefaultConfig_PinsSPECAndTrackedDefaults separates implemented SPEC §6.4
+// defaults from current cross-provider state defaults. SPEC 0.0.2 makes state
+// defaults adapter-defined; D43 / #1144 owns that cutover. Each field keeps an
+// independent assertion so one regression cannot hide behind a sibling.
+func TestDefaultConfig_PinsSPECAndTrackedDefaults(t *testing.T) {
 	t.Parallel()
 	cfg := DefaultConfig()
 
@@ -2309,11 +2307,11 @@ func TestDefaultConfig_AlignsToSPEC_6_4(t *testing.T) {
 
 	wantActive := []string{"Todo", "In Progress"}
 	if !reflect.DeepEqual(cfg.Tracker.ActiveStates, wantActive) {
-		t.Errorf("Tracker.ActiveStates = %#v, want SPEC §6.4 default %#v", cfg.Tracker.ActiveStates, wantActive)
+		t.Errorf("Tracker.ActiveStates = %#v, want current D43 / #1144 implementation default %#v", cfg.Tracker.ActiveStates, wantActive)
 	}
 	wantTerminal := []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"}
 	if !reflect.DeepEqual(cfg.Tracker.TerminalStates, wantTerminal) {
-		t.Errorf("Tracker.TerminalStates = %#v, want SPEC §6.4 default %#v (order matters; mirrors Elixir schema.ex:54)", cfg.Tracker.TerminalStates, wantTerminal)
+		t.Errorf("Tracker.TerminalStates = %#v, want current D43 / #1144 implementation default %#v (order matters)", cfg.Tracker.TerminalStates, wantTerminal)
 	}
 
 	// SPEC §6.4 marks tracker.kind REQUIRED, so DefaultConfig must

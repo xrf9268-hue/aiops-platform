@@ -19,10 +19,11 @@ Linear, Gitea, or GitHub issue
 It is a Go implementation of [OpenAI Symphony](https://github.com/openai/symphony).
 The [`SPEC.md`](docs/research/SPEC.md) contract — mirrored verbatim into this
 repo from
-[upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so it cannot
-drift (upstream is an unmaintained demo repo) — is authoritative; the Elixir
-reference implementation is the tie-breaker when the SPEC text is ambiguous. Why
-we continue the Go port here rather than forking is recorded in
+[upstream](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/SPEC.md) at an audited
+commit so a moving upstream branch cannot change the contract mid-review — is
+authoritative; the Elixir reference implementation at that upstream revision
+is the tie-breaker when the SPEC text is ambiguous. Why we continue the Go port
+here rather than forking is recorded in
 [`DECISION.md`](DECISION.md); the current SPEC deviation ledger lives in
 [`DEVIATIONS.md`](DEVIATIONS.md).
 
@@ -367,11 +368,14 @@ Legacy fallback files such as `.aiops/WORKFLOW.md` and `.github/WORKFLOW.md` are
 not searched and are not reported as shadowed workflow sources.
 
 If the canonical file does not exist, the worker proceeds with built-in
-defaults. The table below mirrors SPEC §6.4's cheat-sheet so a SPEC reader's
-mental model lines up with `worker --print-config` output; defaults that diverge
-from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md). It is
-deliberately partial — the exhaustive key-by-key reference (every front-matter
-key with type, default, behavior, and validation rule) is
+defaults. The table below maps the current implementation to SPEC §6.4's
+cheat-sheet so a SPEC reader can compare it with `worker --print-config`
+output. SPEC 0.0.2 moves endpoint/scope/auth settings into the adapter-owned
+`tracker.provider` object and makes state defaults adapter-defined; the
+current flat fields and cross-provider state defaults remain open deviation
+D43 / #1144 rather than SPEC conformance. The table is deliberately partial —
+the exhaustive key-by-key reference (every front-matter key with type, default,
+behavior, and validation rule) is
 [`docs/runbooks/workflow-frontmatter-reference.md`](docs/runbooks/workflow-frontmatter-reference.md):
 
 | Setting | Default | Source |
@@ -388,10 +392,10 @@ key with type, default, behavior, and validation rule) is
 | `server.port` | `4000` (`-1` disables the HTTP state server + dashboard) | implementation |
 | `policy.mode` | `draft_pr` (or `analysis_only`) | implementation |
 | `tracker.kind` | none — REQUIRED per SPEC §6.4; the loader rejects an empty value with an error that names the field and the allowed set (`gitea`, `github`, `linear`) | SPEC §6.4 |
-| `tracker.endpoint` | Linear defaults to `https://api.linear.app/graphql`; Gitea/GitHub use this as the REST API base URL, with env fallbacks only when omitted | SPEC §6.4 / implementation |
-| `tracker.project_slug` | required for `tracker.kind: linear` | SPEC §6.4 |
-| `tracker.active_states` | `[Todo, In Progress]` | SPEC §6.4 |
-| `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | SPEC §6.4 |
+| `tracker.endpoint` | Linear defaults to `https://api.linear.app/graphql`; Gitea/GitHub use this as the REST API base URL, with env fallbacks only when omitted | implementation (open D43 / #1144; SPEC replacement: `tracker.provider`) |
+| `tracker.project_slug` | required for `tracker.kind: linear` | implementation (open D43 / #1144; SPEC replacement: `tracker.provider`) |
+| `tracker.active_states` | `[Todo, In Progress]` | implementation default (open D43 / #1144; SPEC §6.4 makes the default adapter-defined) |
+| `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | implementation default (open D43 / #1144; SPEC §6.4 makes the default adapter-defined) |
 | `tracker.required_labels` | `[]` (gate off) — opt-in dispatch filter: an issue must carry every listed label (matched case-insensitively after trimming) to dispatch or keep running. Removing a required label makes a running agent self-stop after its current turn (per-turn refresh) and releases retry/blocked work on the next poll. A blank entry matches no issue. Labels are projected up to the Linear API's 250-per-issue page maximum; a required label beyond that window is outside the gate's evidence (an issue carrying 250+ labels is pathological — keep the marker set small). | SPEC §4.1.1 / §6.4 |
 | `tracker.pagination_max_pages` | adapter default (`github`: 10 pages; `gitea`: 20 pages; `linear`: 200 pages) | implementation |
 | `workspace.root` | `<system-temp>/symphony_workspaces` (resolved via `os.TempDir()` at startup, typically `/tmp/symphony_workspaces` on Linux; per-boot — set explicitly to a long-lived path for persistence) | SPEC §6.4 |
