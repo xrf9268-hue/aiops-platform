@@ -84,6 +84,25 @@ func TestSafeRemoveRejectsParentTraversal(t *testing.T) {
 	}
 }
 
+func TestSafeRemoveRejectsRawParentTraversalInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o700); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	rawPath := filepath.Join(root, "nested") + string(filepath.Separator) + ".." + string(filepath.Separator) + "target"
+
+	if err := SafeRemove(root, rawPath); !errors.Is(err, ErrSafeRemoveEscapesRoot) {
+		t.Fatalf("raw traversal err = %v, want ErrSafeRemoveEscapesRoot", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("target must remain after raw traversal rejection: %v", err)
+	}
+}
+
 func TestSafeRemoveRejectsSymlinkEscape(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
