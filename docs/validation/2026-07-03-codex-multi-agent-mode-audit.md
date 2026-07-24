@@ -3,6 +3,20 @@
 **Date:** 2026-07-03
 **Issue:** #1056
 
+> [!WARNING]
+> **Superseded protocol conclusion.** This dated audit is retained as evidence
+> for [#1056](https://github.com/xrf9268-hue/aiops-platform/issues/1056) and the
+> Codex 0.142.x contract, but its recommendation to send
+> `thread/start.multiAgentMode` is no longer current. [#1101](https://github.com/xrf9268-hue/aiops-platform/issues/1101)
+> aligned the runner with Codex 0.144.4, where that field is deprecated and
+> ignored, so the current payload intentionally omits it. Use the
+> [protocol/version pin](../../internal/runner/codex_version.go) and
+> [schema contract tests](../../internal/runner/codex_app_server_schema_test.go)
+> as the current protocol sources of truth; the
+> [payload builder](../../internal/runner/codex_app_server.go) shows the current
+> request shape. The material below is historical evidence, not current payload
+> guidance.
+
 ## Verdict
 
 Keep `thread/start.multiAgentMode: "none"` in the Codex app-server runner.

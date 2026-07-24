@@ -8,6 +8,11 @@ Accepted
 
 2026-04-28
 
+> [!NOTE]
+> This ADR records the architectural decision and its rationale. See
+> the [architecture overview](../architecture.md) for the current runtime and
+> the [deviation ledger](../../DEVIATIONS.md) for current alignment status.
+
 ## Context
 
 The project started as a Gitea-first automation pipeline:
@@ -56,8 +61,7 @@ Linear or Gitea task
   -> deterministic workspace
   -> WORKFLOW.md
   -> agent runner
-  -> verification
-  -> agent-side pull request handoff
+  -> agent-owned verification + pull request handoff
 ```
 
 ## Consequences
@@ -77,31 +81,6 @@ Linear or Gitea task
 - There is some conceptual overlap with OpenAI Symphony.
 - Linear and Gitea paths may diverge unless adapter boundaries stay clean.
 - More safety and reconciliation work is needed before running against important company code.
-
-## Scope
-
-In scope now:
-
-- Gitea, GitHub, and Linear tracker polling
-- in-memory orchestrator runtime state
-- repo-owned `WORKFLOW.md`
-- deterministic workspace creation
-- mock runner
-- Codex runner shell integration
-- Claude runner shell integration
-- prompt-scoped path guidance with repository-side review and protection
-- verification commands
-- draft pull request handoff
-
-Out of scope for now:
-
-- enterprise RBAC
-- multi-tenant UI
-- Kubernetes deployment
-- automatic merge
-- complex distributed scheduling
-- full dashboard
-- advanced sandbox isolation
 
 ## Safety posture
 
@@ -128,13 +107,3 @@ Rejected as the only path because it delays real productivity. Linear plus Symph
 ### Build a full enterprise platform first
 
 Rejected for now. The current target is personal productivity, not a multi-team internal developer platform.
-
-## Next steps
-
-1. Validate the mock loop end to end.
-2. Validate Codex runner on a personal demo repository.
-3. Add Linear status updates after successful handoff.
-4. Add PR labels and reviewers.
-5. ~~Add better diff statistics and path policy checks.~~ — implemented as the worker `policy` path/diffstat gate, then removed under #561: SPEC §3.2 homes scope/path rules in the `WORKFLOW.md` prompt and the gate ran post-push (could only flag, never prevent). Do not re-add.
-6. ~~Add `RUN_SUMMARY.md` enforcement.~~ — implemented, then removed under #561: the worker gate ran after the agent had already pushed (SPEC §1), the agent's PR body is the change record, and nothing read the artifact. Do not re-add.
-7. Add a Claude analysis-only workflow mode.

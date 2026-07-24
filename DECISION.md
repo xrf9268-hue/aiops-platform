@@ -7,6 +7,14 @@
 > **See also:** [`AGENTS.md`](AGENTS.md), [`DEVIATIONS.md`](DEVIATIONS.md), [`docs/audits/2026-05-15-spec-vs-go-gap-audit.md`](docs/audits/2026-05-15-spec-vs-go-gap-audit.md)
 > **Earlier version:** preserved in git history at commit `4f9e98d` ("docs: record decision to stop Go port and adopt a Symphony fork"). Read in conjunction with this document for the full reasoning chain.
 
+> [!NOTE]
+> **Current-status scope.** The active decision is to continue the Go port in
+> this repository with the Symphony SPEC as its contract. The D1–D24 counts,
+> sequencing discussion, and next steps below are the dated 2026-05-15 decision
+> record, not a current backlog. Use [`DEVIATIONS.md`](DEVIATIONS.md) for current
+> deviation status and [`docs/architecture.md`](docs/architecture.md) for the
+> current runtime design.
+
 ## TL;DR
 
 `aiops-platform` was started as a Go implementation of OpenAI Symphony. The
