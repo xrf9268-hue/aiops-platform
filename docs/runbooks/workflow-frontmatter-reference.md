@@ -3,10 +3,13 @@
 The exhaustive operator-facing reference for every key the worker reads from
 `WORKFLOW.md` YAML front matter (schema: `internal/workflow/config.go`). The
 README's [defaults table](../../README.md#workflowmd-configuration) is the
-SPEC §6.4 cheat-sheet view — it deliberately mirrors SPEC's own table; this
-page is the complete view, including the keys SPEC's cheat-sheet does not
-list. Keep the two consistent: the cheat-sheet stays the SPEC-mapping summary,
-this page the single exhaustive source (clean-code rule 3).
+current-to-SPEC §6.4 mapping view; this page is the complete implementation
+view, including keys that SPEC's cheat-sheet does not list. The current flat
+tracker endpoint/scope/auth fields predate SPEC 0.0.2's adapter-owned
+`tracker.provider` object and remain open deviation D43 / #1144, so their
+presence below documents current behavior rather than conformance. Keep the
+two views consistent and this page the single exhaustive source (clean-code
+rule 3).
 
 For any one workdir, `worker --print-config /path/to/clone` prints the
 effective resolved config (with `tracker.api_key` masked) and is the ground
@@ -52,18 +55,23 @@ truth this page approximates.
 
 ## `tracker`
 
+The flat endpoint/scope/auth fields and cross-provider state defaults below
+describe the current pre-release implementation. SPEC §6.4 assigns those
+settings/defaults to the selected adapter; D43 / #1144 owns their atomic
+replacement with `tracker.provider`.
+
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
 | `tracker.kind` | string | — | Selects the tracker adapter | **required**; `gitea`, `github`, or `linear` |
-| `tracker.api_key` | string | — | Tracker API token, referenced as `$VAR` (e.g. `$LINEAR_API_KEY`, `$GITEA_TOKEN`, `$GITHUB_TOKEN`). Worker-held: both the variable name and its value are denied from every agent `env_passthrough`/`env_allowlist`, and `--print-config` masks it | `$VAR` resolved at load |
-| `tracker.endpoint` | string | — | Tracker API base URL (SPEC §5.3.1). Linear defaults to `https://api.linear.app/graphql`. When omitted, GitHub falls back to the `GITHUB_API_BASE_URL` env var, then `https://api.github.com`; Gitea falls back to the `GITEA_BASE_URL` env var, then the local-dev default `http://localhost:3000` | `$VAR` |
-| `tracker.team_key` | string | — | Linear team key. Scopes the `linear_graphql` current-issue mutation guard's workflow-state lookup to one team, so state names that repeat across teams resolve unambiguously (`internal/runner/linear_graphql_current_issue_guard.go`) | — |
-| `tracker.project_slug` | string | — | Linear project to poll (SPEC §11.2) | required when `kind: linear` |
-| `tracker.active_states` | string list | `[Todo, In Progress]` | Issue states polled as dispatch candidates | — |
-| `tracker.terminal_states` | string list | `[Closed, Cancelled, Canceled, Duplicate, Done]` | States that end work on an issue (also used by the retry/backoff loop to stop redispatch) | — |
+| `tracker.api_key` | string | — | Current flat token field (open D43 / #1144), referenced as `$VAR` (e.g. `$LINEAR_API_KEY`, `$GITEA_TOKEN`, `$GITHUB_TOKEN`). Worker-held: both the variable name and its value are denied from every agent `env_passthrough`/`env_allowlist`, and `--print-config` masks it | `$VAR` resolved at load |
+| `tracker.endpoint` | string | — | Current flat API-base field (open D43 / #1144). Linear defaults to `https://api.linear.app/graphql`. When omitted, GitHub falls back to the `GITHUB_API_BASE_URL` env var, then `https://api.github.com`; Gitea falls back to the `GITEA_BASE_URL` env var, then the local-dev default `http://localhost:3000` | `$VAR` |
+| `tracker.team_key` | string | — | Current flat Linear scope field (open D43 / #1144). Scopes the `linear_graphql` current-issue mutation guard's workflow-state lookup to one team, so state names that repeat across teams resolve unambiguously (`internal/runner/linear_graphql_current_issue_guard.go`) | — |
+| `tracker.project_slug` | string | — | Current flat Linear project scope (open D43 / #1144) | required when `kind: linear` |
+| `tracker.active_states` | string list | `[Todo, In Progress]` | Current cross-provider implementation default; SPEC §6.4 makes the default adapter-defined (open D43 / #1144) | — |
+| `tracker.terminal_states` | string list | `[Closed, Cancelled, Canceled, Duplicate, Done]` | Current cross-provider implementation default; SPEC §6.4 makes the default adapter-defined (open D43 / #1144); terminal states also stop retry/backoff redispatch | — |
 | `tracker.inactive_states` | string list | `[]` | Non-terminal states that make an already-running issue ineligible: poll-tick reconciliation stops in-flight runs when an issue moves here (operator-pause states such as `Backlog`) | — |
 | `tracker.required_labels` | string list | `[]` (gate off) | Opt-in dispatch gate (SPEC §4.1.1): an issue must carry every listed label to dispatch or keep running. Entries are trimmed, lowercased, de-duped; a blank entry matches no issue. See the README table row for the Linear 250-label projection ceiling | — |
-| `tracker.pagination_max_pages` | int | `0` = adapter default (`github` 10, `gitea` 20, `linear` 200) | Caps one tracker pagination scan. Linear applies the same cap to issue listing and inverse-relation pagination | ≥ 0 |
+| `tracker.pagination_max_pages` | int | `0` = adapter default (`github` 10, `gitea` 20, `linear` 200) | Current flat adapter-tuning field (open D43 / #1144). Caps one tracker pagination scan; Linear applies the same cap to issue listing and inverse-relation pagination | ≥ 0 |
 
 ## `polling`
 

@@ -1126,9 +1126,9 @@ func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	// Construct through the production reconciliation path with the SPEC §5.3.1
-	// default terminal_states (workflow.DefaultConfig), so a Done blocker is
-	// still treated as terminal and only the unblocked Todo issue dispatches.
+	// Construct through the production reconciliation path with the current
+	// cross-provider terminal-state default. D43 / #1144 tracks the move to
+	// adapter-defined defaults; until then a Done blocker remains terminal.
 	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
 		ActiveStates:   []string{"Todo"},
 		TerminalStates: workflow.DefaultConfig().Tracker.TerminalStates,
@@ -1263,7 +1263,7 @@ func TestPollOnceIgnoresBlockersForNonTodoStates(t *testing.T) {
 	close(dispatcher.releaseCh)
 }
 
-func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
+func TestPollOnceTreatsCurrentDefaultTerminalBlockersAsUnblocked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1281,11 +1281,11 @@ func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	// Use workflow.DefaultConfig().Tracker.TerminalStates so the test actually
-	// exercises the SPEC §5.3.1 5-state default ("Done", "Canceled",
-	// "Cancelled", "Closed", "Duplicate"). Previously this was hard-coded to
-	// ["Done", "Canceled"] and relied on filterEligibleCandidates's now-removed
-	// hardcoded overlay (#232) to backfill the remaining three terminal states.
+	// Use workflow.DefaultConfig().Tracker.TerminalStates so the test exercises
+	// the current D43 / #1144 5-state implementation default. Previously this
+	// was hard-coded to ["Done", "Canceled"] and relied on
+	// filterEligibleCandidates's now-removed overlay (#232) to backfill the
+	// remaining three terminal states.
 	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
 		ActiveStates:   []string{"Todo"},
 		TerminalStates: workflow.DefaultConfig().Tracker.TerminalStates,
@@ -1344,8 +1344,8 @@ func TestPollOnceTodoBlockerHonorsOperatorConfiguredTerminalStates(t *testing.T)
 // TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll confirms
 // that an explicitly empty terminal_states slice from
 // NewPollerWithReconciliation reaches filterEligibleCandidates verbatim — it
-// is NOT silently replaced by the DefaultConfig 5-state set. SPEC §5.3.1
-// default semantics: defaults apply on omission, not on explicit override.
+// is NOT silently replaced by the current D43 / #1144 DefaultConfig 5-state
+// set. Defaults apply on omission, not on an explicit override.
 func TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll(t *testing.T) {
 	issues := []tracker.Issue{
 		{ID: "todo-done", Identifier: "LIN-1", Title: "Done blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-0", State: "Done"}}},
