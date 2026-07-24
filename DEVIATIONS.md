@@ -5,9 +5,9 @@ upstream Symphony project. Three sources are jointly authoritative:
 
 - [Symphony SPEC.md](docs/research/SPEC.md) — the protocol contract, mirrored
   verbatim from
-  [upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so it cannot
+  [upstream](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/SPEC.md) so it cannot
   drift.
-- [`openai/symphony` Elixir reference implementation](https://github.com/openai/symphony/tree/main/elixir/lib/symphony_elixir) —
+- [`openai/symphony` Elixir reference implementation](https://github.com/openai/symphony/tree/653f8b3cc476db03420479ba6f95b2ed7281c401/elixir/lib/symphony_elixir) —
   the working reference. When SPEC text is ambiguous, the Elixir module's
   behavior is the tiebreaker. **Not** a porting target — see
   [`DECISION.md`](DECISION.md).
@@ -38,9 +38,13 @@ operational expectations and harness-engineering posture):
 is a hard requirement and the project is pre-release, so the cost of closing
 deviations is at its minimum right now.
 
-The umbrella tracking issue is [#67](https://github.com/xrf9268-hue/aiops-platform/issues/67).
+The historical D1–D24 umbrella is
+[#67](https://github.com/xrf9268-hue/aiops-platform/issues/67). The current
+Symphony 0.0.2 alignment ledger is
+[#1137](https://github.com/xrf9268-hue/aiops-platform/issues/1137), pinned to
+upstream `504101ec^..653f8b3`.
 
-The 2026-05-15 gap audit (PR [#82](https://github.com/xrf9268-hue/aiops-platform/pull/82), report at [`docs/audits/2026-05-15-spec-vs-go-gap-audit.md`](docs/audits/2026-05-15-spec-vs-go-gap-audit.md)) is the most recent full sweep against SPEC. It confirmed D1–D9, surfaced D10–D24, and documents 12 silent-area categories. When a row below says "see audit", treat the audit doc as the source of file:line evidence and severity reasoning.
+The 2026-05-15 gap audit (PR [#82](https://github.com/xrf9268-hue/aiops-platform/pull/82), report at [`docs/audits/2026-05-15-spec-vs-go-gap-audit.md`](docs/audits/2026-05-15-spec-vs-go-gap-audit.md)) is the historical D1–D24 sweep. The 2026-07-24 incremental source audit recorded in #1137 revalidated the current Go implementation against Symphony 0.0.2 and opened D38–D49 below. The upstream Jira/Asana/GitLab adapters, SSH workspaces, Burrito packaging, and website changes are optional additions rather than missing core behavior in this port.
 
 ## Deviations
 
@@ -83,6 +87,18 @@ The 2026-05-15 gap audit (PR [#82](https://github.com/xrf9268-hue/aiops-platform
 | D35 | Operator Terminal Stop. SPEC §8.5 / §16.5 and upstream `orchestrator.ex` stop active runs when tracker state leaves the active set, but they do not prevent the still-running agent from issuing an agent-owned `issueUpdate` back into an active state before the process observes cancellation; PR #625's upstream comparison reproduced this race for #622. The port now accepts a process-local safety deviation: once this worker observes the current issue in a configured terminal state during reconcile, retry cleanup, or §16.5 finalize-time self-stop without a structured agent-owned current-issue non-active handoff fact, it records an in-memory `OperatorTerminalStop` latch. Agent-owned terminal handoffs still clean the workspace and do not queue continuation, but they do not latch/suppress later intentional rework. Later dispatches and retry-fire dispatches of the same latched issue ID are suppressed even if the tracker currently reads active, cleanup-time active rechecks may skip deletion but cannot resume continuation, and the agent-visible Linear tool rejects current-issue `issueUpdate` into any configured `active_states` before HTTP dispatch. For the current issue, unsupported or ambiguous `issueUpdate` shapes are also rejected fail-closed instead of guessed; non-current issue updates keep the ordinary mutation gate behavior. The guard uses structured tracker snapshots and parsed `issueUpdate(id,input.stateId)` input only; it never parses Codex natural-language output, task-event text, or ad hoc GraphQL substrings. Agent comments/workpad writes after the stop remain possible for audit but use a separate `tool_call_mutation_post_operator_terminal_stop` event so they do not count as agent handoff activity. Like D34 blocked claims, this latch is in-process runtime state: a worker restart clears it, and recovery still comes from tracker polling plus filesystem reconciliation. The latch set is also bounded per process by `MaxRecentOperatorTerminalStops` (default 1000, #667): the oldest latch is evicted once the bound is exceeded, with `CumulativeOperatorTerminalStopsTotal` preserved for observability. Eviction is safe because an evicted issue is re-dispatched only if it currently reads active in the tracker (the poll filters terminal issues out regardless of the latch), and by the time an issue is the oldest of N distinct stops any still-running agent that could have produced the D35 re-activation race has long exited — so an active reading then is intentional rework, where dispatch is the desired outcome; recovery still comes from polling plus reconciliation. | §1 boundary, §8.5, §10.5, §13.7, §16.5 | High | Closed (accepted deviation) | [#622](https://github.com/xrf9268-hue/aiops-platform/issues/622) |
 | D36 | Clone-URL credential masking (`workflow.MaskCloneURL`). An aiops-platform logging-safety utility with no direct upstream Symphony equivalent: it strips embedded basic-auth (`scheme://user:token@host`) from a clone URL before the value reaches any log, error string, or `--print-config` output (the `mirror.go` clone-failure error, `doctor_tracker.go`, `print_config.go`). It implements the SPEC §1 token-isolation posture for orchestrator-side logs — the agent never sees the token, and neither do the operator's logs. #676 added the first direct unit coverage, which exposed a fail-open gap: the helper returned the raw string whenever `url.Parse` rejected the input (a malformed port, a space in the userinfo), leaking the token into the clone-failure log. It now fails closed via a conservative `scheme://userinfo@` string strip on the `url.Parse` error path (mirroring url.Parse's last-`@`-in-authority rule, leaving an `@` in the path/query untouched). The free-text analogue `workspace.redactCredentials`/`credentialURLRe` agrees on the splitting rule. Same masking-must-not-leak class as #469/#483. | §1 boundary | Low | Closed (accepted extension) | [#676](https://github.com/xrf9268-hue/aiops-platform/issues/676) |
 | D37 | Per-claim token/runtime budget guardrails (`agent.max_tokens_per_claim`, `agent.max_runtime_seconds_per_claim`). SPEC and upstream `orchestrator.ex` expose runner/runtime events but do not cap a live claim by observed token or wall-clock usage. The unattended GitHub workflow failures in #1027 showed that process-lifetime totals were too coarse for operators and that an unclear or usage-limit run could keep burning quota without an operator-visible local stop. The port accepts a narrow process-local safety deviation: configured zero values disable the guardrail; a nonzero token value is checked only against worker-observed, runner-reported Codex telemetry for the current claim, while the runtime value uses worker-measured claim time. External GitHub `@codex review` usage, other reviewers outside the worker session, and otherwise unreported nested or subagent usage are unmeasured, not zero, and do not consume `max_tokens_per_claim`. On exceedance the worker cancels the runner context, records `budget_exceeded`, parks the issue in local `Blocked` with `method=budget_exceeded`, and surfaces current-claim / ended-session / process totals in the §13.7 state API and dashboard. It does not inspect natural-language agent output, estimate unreported usage, run PR review/merge/issue-close logic, or write tracker state; recovery still comes from tracker polling plus explicit operator action or process restart. | §1 boundary, §10.4, §13.7, §15.5, §16.5 | High | Closed (accepted deviation) | [#1027](https://github.com/xrf9268-hue/aiops-platform/issues/1027) |
+| D38 | Recorded workspace paths are validated only after `before_remove`, so a symlink escape can run the hook outside the configured root even though deletion is later refused. | §9.5, §15.2; upstream `7cf29df6` | High | Open | [#1139](https://github.com/xrf9268-hue/aiops-platform/issues/1139) |
+| D39 | Sanitized issue identifiers do not receive a stable hash suffix, so distinct identifiers can collide on one workspace path. | §4.2, §9.1 | High | Open | [#1140](https://github.com/xrf9268-hue/aiops-platform/issues/1140) |
+| D40 | `codex.turn_timeout_ms` is enforced as whole-turn wall time instead of a silence interval reset by every app-server output. | §5.3.6, §10.2, §16.5 | High | Open | [#1141](https://github.com/xrf9268-hue/aiops-platform/issues/1141) |
+| D41 | Generic `item/tool/requestUserInput` requests receive a fabricated noninteractive answer, while recognized MCP approval questions are not handled through the reference's narrow ID/policy gate. | §10.5; upstream `app_server.ex` | Medium | Open | [#1142](https://github.com/xrf9268-hue/aiops-platform/issues/1142) |
+| D42 | Candidate sorting treats negative and greater-than-four priority integers as meaningful instead of ranking only 1–4 before unknown values. | §8.2, §11.3 | Medium | Open | [#1143](https://github.com/xrf9268-hue/aiops-platform/issues/1143) |
+| D43 | Tracker endpoint/scope/auth settings live in one flat cross-provider schema instead of an unknown-key-preserving, adapter-owned `tracker.provider` object. | §5.3.1, §6.4, §11.2 | High | Open | [#1144](https://github.com/xrf9268-hue/aiops-platform/issues/1144) |
+| D44 | Semantic-invalid workflow reloads can replace the last-good snapshot because selected-adapter secret admission and explicit blank-command validation are incomplete. | §6.2, §6.3 | High | Open | [#1145](https://github.com/xrf9268-hue/aiops-platform/issues/1145) |
+| D45 | The normalized Issue model/listing path lacks opaque `native_ref`, nullable assignment/priority/timestamps, and explicit adapter-derived `dispatchable` fields required by the provider-neutral contract. | §4.1.1, §11.2, §11.3, §12.2 | High | Open | [#1146](https://github.com/xrf9268-hue/aiops-platform/issues/1146) |
+| D46 | Explicit-ID refresh returns narrow `IssueState` projections and outcome shims instead of complete normalized Issue snapshots with atomic malformed/missing/error semantics. | §11.1, §16.4–§16.6 | High | Open | [#1147](https://github.com/xrf9268-hue/aiops-platform/issues/1147) |
+| D47 | The generic scheduler reconstructs Linear-style Todo blocker eligibility instead of consuming explicit adapter-derived `dispatchable` plus required labels. | §4.1.1, §8.2, §11.2 | High | Open | [#1148](https://github.com/xrf9268-hue/aiops-platform/issues/1148) |
+| D48 | Retry dispatch performs one candidate lookup but lacks the second full by-ID freshness read immediately before spawn. | §8.4, §16.6; upstream `0517275c` | High | Open | [#1149](https://github.com/xrf9268-hue/aiops-platform/issues/1149) |
+| D49 | Provider-native tool selection/configuration remains runner-owned and cannot bind normalized Issue/native-ref plus adapter-declared secret env names through one selected-adapter session snapshot. | §10.5, §11.2, §15.3 | High | Open | [#1150](https://github.com/xrf9268-hue/aiops-platform/issues/1150) |
 
 Severity reflects the risk and the gap to SPEC, not the implementation effort.
 
@@ -95,10 +111,11 @@ Status vocabulary:
   linked issue remains open because the full acceptance criteria are not met.
 - **Reverting**: the current behavior is still present and is intentionally
   scheduled for removal/replacement.
-- **Closed**: the linked implementation issue is closed; leave the row visible
-  until umbrella #67 closes so future audits can see which D1–D24 items were
-  resolved. A `Closed (accepted deviation)` qualifier means the linked issue
-  closed by explicitly accepting a live divergence; keep that rationale visible.
+- **Closed**: the linked implementation issue is closed; leave historical rows
+  visible after their versioned umbrella closes so future audits can see what
+  was resolved. A `Closed (accepted deviation)` qualifier means the linked
+  issue closed by explicitly accepting a live divergence; keep that rationale
+  visible.
 
 ## Deliberate extensions
 
@@ -148,6 +165,7 @@ linked issue for the latest status. A row stays here until either:
    the row here as `Closed (accepted deviation)` with the accepting PR/issue
    link.
 
-Closing all of D1–D24 (or moving each to accepted-deviation status) is what
-would let the project legitimately describe itself as a Symphony Go port
-rather than "inspired by Symphony".
+Closing historical D1–D24 is no longer sufficient for a current alignment
+claim. Every row opened by the pinned 0.0.2 sweep (currently D38–D49) must also
+be fully closed or explicitly accepted under the same high bar before the
+project describes current `main` as aligned with that contract.

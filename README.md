@@ -19,10 +19,11 @@ Linear, Gitea, or GitHub issue
 It is a Go implementation of [OpenAI Symphony](https://github.com/openai/symphony).
 The [`SPEC.md`](docs/research/SPEC.md) contract — mirrored verbatim into this
 repo from
-[upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so it cannot
-drift (upstream is an unmaintained demo repo) — is authoritative; the Elixir
-reference implementation is the tie-breaker when the SPEC text is ambiguous. Why
-we continue the Go port here rather than forking is recorded in
+[upstream](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/SPEC.md) at an audited
+commit so a moving upstream branch cannot change the contract mid-review — is
+authoritative; the Elixir reference implementation at that upstream revision
+is the tie-breaker when the SPEC text is ambiguous. Why we continue the Go port
+here rather than forking is recorded in
 [`DECISION.md`](DECISION.md); the current SPEC deviation ledger lives in
 [`DEVIATIONS.md`](DEVIATIONS.md).
 

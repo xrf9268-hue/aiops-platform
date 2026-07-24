@@ -72,7 +72,7 @@ go build ./cmd/worker ./cmd/tui
 ### 5. 提交 → 双审 → 开 PR
 1. 按协议 §2–§3 commit-first + pre-push 双 reviewer；先执行协议里的 **subagent-first reviewer routing**，具体 reviewer-routing 细节以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md) 为唯一来源。主交互会话里的 reviewer subagent 路径在工具契约允许默认派生时**默认开启、不问授权**（#900）；运行时契约挡住时按协议记录 fallback，操作者可在当前请求写 `CLI review only` 等短语 opt-out。review finding 先按当前 head、issue 计划、SPEC/Elixir 参考和相邻路径验证技术正确性，再修复 / 反证 / 延后。§4 每 push 跑 `@codex review` 收敛，§5 处理 review threads。
 2. push 后开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`），列验收项、验证命令、变异验证、风险/deferral；PR body 是活账本（协议 §7）。
-3. **每条 finding 归入 ≥1 类**：算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试；然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
+3. **每条 finding 归入 ≥1 类**：算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试；然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；挂到 `DEVIATIONS.md` 指向的当前 alignment ledger，不要默认使用历史 D1–D24 的 #67）。
 4. **Deferred 偏差必须开 issue**（AGENTS.md rule 2）：决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
 5. **Scope 分离**：治理/文档类改动从 main 开新分支**单独 PR**，不要塞进 fix PR。
 6. 收敛后交给 `gh-pr-follow-through`（私有 `xrf9268-hue/yy-skills`；云端容器通常没装）盯 CI + 线程到 merge-ready。**该 skill 不可用时就地内联**：`gh pr checks <pr> --watch --fail-fast` 等 CI → GraphQL `reviewThreads` 解决所有未决 actionable thread → 最后一次 PR body 更新后等新的 `PR Metadata` 终态并做 warning audit → merge-ready。期间推了修复就对新 head 重跑协议 §3–§5。

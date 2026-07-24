@@ -68,16 +68,17 @@ jointly authoritative**:
 
 1. The protocol contract: [Symphony SPEC.md](docs/research/SPEC.md) — mirrored
    verbatim from
-   [upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so the
-   contract this port targets cannot drift (upstream is an unmaintained demo
-   repo); re-sync by bumping the commit hash in the mirror's header (#799).
-2. The reference implementation: [`openai/symphony` Elixir tree](https://github.com/openai/symphony/tree/main/elixir).
+   [upstream](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/SPEC.md) at an
+   audited commit so the contract this port targets cannot move underneath a
+   review; re-sync by replacing the verbatim body and bumping the commit,
+   date, and SHA-256 in the mirror's header (#799, #1138).
+2. The reference implementation: [`openai/symphony` Elixir tree](https://github.com/openai/symphony/tree/653f8b3cc476db03420479ba6f95b2ed7281c401/elixir).
    When SPEC text is ambiguous, the reference's behavior is the tiebreaker.
    Pay particular attention to:
-   - [`elixir/lib/symphony_elixir/orchestrator.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/orchestrator.ex) — in-process GenServer state; no DB; reconcile-on-startup via tracker fetch.
-   - [`elixir/lib/symphony_elixir/codex/app_server.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/codex/app_server.ex) — long-running JSON-RPC 2.0 over stdio; not one-shot exec.
-   - [`elixir/lib/symphony_elixir/tracker.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/tracker.ex) and adapters — polling model with `:poll_interval_ms`; no webhook ingress.
-   - [`elixir/lib/symphony_elixir/config/schema.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/config/schema.ex) — canonical config keys, defaults, and types.
+   - [`elixir/lib/symphony_elixir/orchestrator.ex`](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/elixir/lib/symphony_elixir/orchestrator.ex) — in-process GenServer state; no DB; reconcile-on-startup via tracker fetch.
+   - [`elixir/lib/symphony_elixir/codex/app_server.ex`](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/elixir/lib/symphony_elixir/codex/app_server.ex) — long-running JSON-RPC 2.0 over stdio; not one-shot exec.
+   - [`elixir/lib/symphony_elixir/tracker.ex`](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/elixir/lib/symphony_elixir/tracker.ex) and adapters — polling model with `:poll_interval_ms`; no webhook ingress.
+   - [`elixir/lib/symphony_elixir/config/schema.ex`](https://github.com/openai/symphony/blob/653f8b3cc476db03420479ba6f95b2ed7281c401/elixir/lib/symphony_elixir/config/schema.ex) — canonical config keys, defaults, and types.
 3. The authors' announcement post, mirrored locally as
    [`docs/research/2026-04-27-openai-symphony-blog.md`](docs/research/2026-04-27-openai-symphony-blog.md).
    Provides the design rationale and the SPEC §1 problem statement. Direct
@@ -302,8 +303,10 @@ Rules for agents working on this repo:
    find behavior that violates SPEC or contradicts the reference and is not
    already listed there, **do not add a new "deliberate extension" to make the
    discrepancy disappear**. File an issue with the `area:spec-alignment` label
-   so the deviation is visible and tracked. The umbrella tracker is
-   [#67](https://github.com/xrf9268-hue/aiops-platform/issues/67).
+   so the deviation is visible and tracked, then link it from the active
+   alignment ledger named in `DEVIATIONS.md`. Issue
+   [#67](https://github.com/xrf9268-hue/aiops-platform/issues/67) is the
+   historical D1–D24 ledger, not the default destination for new findings.
 3. **"Has better value than SPEC" is a high bar.** Cosmetic convenience (e.g.
    "let users park a config file in a hidden directory") does not clear it.
    Things that initially look like better value but match neither SPEC nor the
