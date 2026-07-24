@@ -22,6 +22,32 @@ func TestSafeRemoveRejectsEmptyRootOrPath(t *testing.T) {
 	}
 }
 
+func TestSafeRemoveRejectsRelativeRootOrPath(t *testing.T) {
+	root := t.TempDir()
+
+	if err := SafeRemove("relative-root", filepath.Join(root, "x")); !errors.Is(err, ErrSafeRemoveInvalidPath) {
+		t.Fatalf("relative root err = %v, want ErrSafeRemoveInvalidPath", err)
+	}
+	if err := SafeRemove(root, "relative-path"); !errors.Is(err, ErrSafeRemoveInvalidPath) {
+		t.Fatalf("relative path err = %v, want ErrSafeRemoveInvalidPath", err)
+	}
+}
+
+func TestValidateRemoveDoesNotDeleteValidPath(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tsk-validate")
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
+		t.Fatalf("mkdir valid path: %v", err)
+	}
+
+	if err := ValidateRemove(root, taskDir); err != nil {
+		t.Fatalf("ValidateRemove valid path: %v", err)
+	}
+	if _, err := os.Stat(taskDir); err != nil {
+		t.Fatalf("validated path must remain: %v", err)
+	}
+}
+
 func TestSafeRemoveRejectsRootItself(t *testing.T) {
 	root := t.TempDir()
 

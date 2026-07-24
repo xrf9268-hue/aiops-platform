@@ -417,6 +417,9 @@ type RemoveWorkspaceRequest struct {
 // upstream Workspace.remove_issue_workspaces, which both paths also share.
 // It returns true when the directory was removed.
 func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorkspaceRequest) (bool, error) {
+	if err := workspace.ValidateRemove(req.WorkspaceRoot, req.Path); err != nil {
+		return false, fmt.Errorf("validate %s workspace %s: %w", req.Reason, req.Path, err)
+	}
 	if err := runWorkspaceHook(ctx, ev, req.TaskID, req.Identifier, req.Path, workspace.HookBeforeRemove, req.BeforeRemoveHook, req.HookTimeoutMillis, req.HookEnvPassthrough, req.WorkflowConfig); err != nil {
 		log.Printf("event=before_remove_hook_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", req.TaskID, req.IssueID, req.Identifier, req.Reason, req.Path, err)
 	}

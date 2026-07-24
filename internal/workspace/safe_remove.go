@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// ErrSafeRemoveInvalidPath is returned when SafeRemove is called with an empty
-// or whitespace-only root/path.
+// ErrSafeRemoveInvalidPath is returned when removal validation receives an
+// empty, whitespace-only, or non-absolute root/path.
 var ErrSafeRemoveInvalidPath = errors.New("safe remove: invalid path")
 
 // ErrSafeRemoveEscapesRoot is returned when SafeRemove is asked to delete a
@@ -18,8 +18,17 @@ var ErrSafeRemoveInvalidPath = errors.New("safe remove: invalid path")
 // symlink whose resolved target points outside the root.
 var ErrSafeRemoveEscapesRoot = errors.New("safe remove: path escapes workspace root")
 
-// SafeRemove deletes path with `os.RemoveAll` after confirming that path is a
-// non-empty subdirectory strictly contained under root.
+// ValidateRemove confirms that path is an absolute, non-empty subdirectory
+// strictly contained under an absolute root without deleting it. Cleanup paths
+// that run hooks must call this before the hook, then still call SafeRemove
+// afterward so a hook-time path or symlink swap is rejected too.
+func ValidateRemove(root, path string) error {
+	_, err := validatedRemovePath(root, path)
+	return err
+}
+
+// SafeRemove deletes path with `os.RemoveAll` after applying the same checks as
+// ValidateRemove.
 //
 // Defense-in-depth guard for the worker cleanup paths (per-task workdir
 // rollback after a hook failure, reconcile-driven workspace removal): if a
@@ -33,25 +42,55 @@ var ErrSafeRemoveEscapesRoot = errors.New("safe remove: path escapes workspace r
 // idempotent because both worker call sites can race with manual operator
 // cleanup. Containment is checked first so that a non-existent path under root
 // is allowed but a non-existent path outside root is still rejected.
-func SafeRemove(root, path string) error { //nolint:gocognit // baseline (#521)
+func SafeRemove(root, path string) error {
+	absPath, err := validatedRemovePath(root, path)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(absPath)
+}
+
+func validatedRemovePath(root, path string) (string, error) {
+	absRoot, absPath, err := absoluteRemovePaths(root, path)
+	if err != nil {
+		return "", err
+	}
+	resolvedRoot, err := resolveRemoveRoot(absRoot)
+	if err != nil {
+		return "", err
+	}
+	if err := validateResolvedRemovePath(resolvedRoot, absPath); err != nil {
+		return "", err
+	}
+	return absPath, nil
+}
+
+func absoluteRemovePaths(root, path string) (string, string, error) {
 	root = strings.TrimSpace(root)
 	path = strings.TrimSpace(path)
 	if root == "" || path == "" {
-		return ErrSafeRemoveInvalidPath
+		return "", "", ErrSafeRemoveInvalidPath
+	}
+	if !filepath.IsAbs(root) || !filepath.IsAbs(path) {
+		return "", "", fmt.Errorf("%w: root and path must be absolute", ErrSafeRemoveInvalidPath)
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return fmt.Errorf("safe remove: abs root: %w", err)
+		return "", "", fmt.Errorf("safe remove: abs root: %w", err)
 	}
 	absRoot = filepath.Clean(absRoot)
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return fmt.Errorf("safe remove: abs path: %w", err)
+		return "", "", fmt.Errorf("safe remove: abs path: %w", err)
 	}
 	absPath = filepath.Clean(absPath)
 	if err := assertContained(absRoot, absPath); err != nil {
-		return err
+		return "", "", err
 	}
+	return absRoot, absPath, nil
+}
+
+func resolveRemoveRoot(absRoot string) (string, error) {
 	// Re-validate after resolving symlinks on both root and path. A directory
 	// symlink under root that points outside (e.g. a stray operator-created
 	// link, or a malicious workspace file) must be rejected even though its
@@ -61,20 +100,21 @@ func SafeRemove(root, path string) error { //nolint:gocognit // baseline (#521)
 	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
-			resolvedRoot = absRoot
-		} else {
-			return fmt.Errorf("safe remove: resolve root symlinks: %w", err)
+			return absRoot, nil
 		}
+		return "", fmt.Errorf("safe remove: resolve root symlinks: %w", err)
 	}
-	resolvedRoot = filepath.Clean(resolvedRoot)
+	return filepath.Clean(resolvedRoot), nil
+}
+
+func validateResolvedRemovePath(resolvedRoot, absPath string) error {
 	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
-		if err := assertContained(resolvedRoot, filepath.Clean(resolved)); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
+		return assertContained(resolvedRoot, filepath.Clean(resolved))
+	} else if os.IsNotExist(err) {
+		return nil
+	} else {
 		return fmt.Errorf("safe remove: resolve symlinks: %w", err)
 	}
-	return os.RemoveAll(absPath)
 }
 
 func assertContained(absRoot, absPath string) error {

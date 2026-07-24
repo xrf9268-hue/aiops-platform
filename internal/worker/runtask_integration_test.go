@@ -745,6 +745,44 @@ func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
 	}
 }
 
+func TestRunTaskRejectsRollbackSymlinkBeforeBeforeRemoveHook(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
+	outside := t.TempDir()
+	outsideSentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(outsideSentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write outside sentinel: %v", err)
+	}
+	marker := filepath.Join(outside, "before-remove-ran")
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+		AfterCreate: workflow.WorkspaceHook{Commands: []string{
+			"mv " + shellQuoteForTest(workdir) + " " + shellQuoteForTest(workdir+".original") +
+				" && ln -s " + shellQuoteForTest(outside) + " " + shellQuoteForTest(workdir) + " && exit 7",
+		}},
+		BeforeRemove: workflow.WorkspaceHook{Commands: []string{"touch " + shellQuoteForTest(marker)}},
+	}
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr == nil {
+		t.Fatal("runTask succeeded, want after_create hook failure")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("before_remove marker stat error = %v, want not exist", err)
+	}
+	if body, err := os.ReadFile(outsideSentinel); err != nil || string(body) != "keep" {
+		t.Fatalf("outside sentinel = %q, %v; want untouched", body, err)
+	}
+	for _, e := range append(ev.byKind(task.EventWorkspaceHookStart), ev.byKind(task.EventWorkspaceHookEnd)...) {
+		payload, ok := e.Payload.(map[string]any)
+		if ok && fmt.Sprint(payload["hook"]) == string(workspace.HookBeforeRemove) {
+			t.Fatalf("unexpected before_remove event after rollback symlink escape: %#v", e)
+		}
+	}
+}
+
 func TestRunTaskAfterRunHookRejectsTrackerAPIKeyValuePassthroughOnRunnerFailure(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
