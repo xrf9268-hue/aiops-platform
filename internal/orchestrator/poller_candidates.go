@@ -257,8 +257,8 @@ func todoWorkflowState(state string) bool {
 func sortCandidates(issues []tracker.Issue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		left, right := issues[i], issues[j]
-		leftPriority := linearPrioritySortKey(left.Priority)
-		rightPriority := linearPrioritySortKey(right.Priority)
+		leftPriority := prioritySortKey(left.Priority)
+		rightPriority := prioritySortKey(right.Priority)
 		if leftPriority != rightPriority {
 			return leftPriority < rightPriority
 		}
@@ -289,11 +289,11 @@ func compareCreatedAt(left, right time.Time) int {
 	}
 }
 
-func linearPrioritySortKey(priority int) int {
-	if priority == 0 {
-		return 1 << 30
+func prioritySortKey(priority int) int {
+	if priority >= 1 && priority <= 4 {
+		return priority
 	}
-	return priority
+	return 5
 }
 
 func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
