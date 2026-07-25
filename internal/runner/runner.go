@@ -326,8 +326,8 @@ func IsStall(err error) bool {
 	return errors.As(err, &se)
 }
 
-// TurnTimeoutError is returned when a single agent turn exceeds its configured
-// per-turn budget while the outer run context remains alive.
+// TurnTimeoutError is returned when an active turn stream stays silent past its
+// configured budget while the outer run context remains alive.
 type TurnTimeoutError struct {
 	Timeout time.Duration
 	Elapsed time.Duration

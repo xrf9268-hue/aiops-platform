@@ -1829,39 +1829,6 @@ cat > /dev/null
 	}
 }
 
-func TestCodexAppServerRunnerReadTimeoutDoesNotPreemptStallBudget(t *testing.T) {
-	codexAppServerStubScript(t, `
-import json, time
-for line in sys.stdin:
-    msg=json.loads(line)
-    if msg.get('method') == 'initialize':
-        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
-    elif msg.get('method') == 'thread/start':
-        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
-    elif msg.get('method') == 'turn/start':
-        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        print(json.dumps({'method': 'item/updated', 'params': {'message': 'started'}}), flush=True)
-        time.sleep(2)
-        break
-`)
-	wd := codexWorkdir(t, "x")
-	in := appServerInput(wd)
-	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	in.Workflow.Config.Codex.StallTimeoutMs = 250
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	start := time.Now()
-	_, err := (CodexAppServerRunner{}).Run(ctx, in)
-	elapsed := time.Since(start)
-	if !IsStall(err) {
-		t.Fatalf("Run error = %T %[1]v, want stall timeout despite shorter read timeout", err)
-	}
-	if elapsed < 250*time.Millisecond {
-		t.Fatalf("Run elapsed = %s, want read_timeout_ms not to fire before stall_timeout_ms", elapsed)
-	}
-}
-
 func TestCodexAppServerRunnerTreatsNestedFailedTurnCompletedAsError(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
@@ -2379,8 +2346,48 @@ for line in sys.stdin:
 	defer cancel()
 
 	_, err := (CodexAppServerRunner{}).Run(ctx, in)
-	if err == nil || !strings.Contains(err.Error(), "turn timeout") {
-		t.Fatalf("Run error = %v, want app-server turn timeout", err)
+	if !IsTurnTimeout(err) {
+		t.Fatalf("Run error = %T %[1]v, want *TurnTimeoutError", err)
+	}
+	if IsStall(err) || IsReadTimeout(err) || IsTimeout(err) {
+		t.Fatalf("Run error = %T %[1]v, want turn timeout distinct from stall/read/outer timeout", err)
+	}
+	if category, ok := ErrorCategory(err); !ok || category != CategoryTurnTimeout {
+		t.Fatalf("ErrorCategory(%v) = %q,%v; want %q,true", err, category, ok, CategoryTurnTimeout)
+	}
+}
+
+func TestCodexAppServerRunnerTurnTimeoutResetsOnStreamOutput(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        for i in range(5):
+            time.sleep(0.25)
+            print(json.dumps({'method': 'item/updated', 'params': {'message': 'progress %d' % i}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'completed after long active turn'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.TurnTimeoutMs = 1000
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	in.Workflow.Config.Codex.StallTimeoutMs = 0
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	res, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err != nil {
+		t.Fatalf("Run: %v, want active stream output to reset turn_timeout_ms", err)
+	}
+	if res.Summary != "completed after long active turn" {
+		t.Fatalf("Summary = %q, want completion after a turn longer than turn_timeout_ms", res.Summary)
 	}
 }
 
@@ -2583,15 +2590,14 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.TurnTimeoutMs = 25
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	// The 25ms per-turn deadline is the load-bearing value, not the outer ctx.
-	// classifyTurnError only yields a *TurnTimeoutError when the per-turn deadline
-	// fires while the outer ctx is still alive (codex_app_server.go), so the
-	// errors.As(err, &te) check below already proves the turn timeout — not the
-	// outer ctx — ended the run.
+	// The 25ms stream-silence deadline is the load-bearing value, not the outer
+	// ctx. readTurnMessage only yields a *TurnTimeoutError when its child
+	// deadline fires while the outer ctx is still alive, so the errors.As check
+	// below proves the turn-silence timeout — not the outer ctx — ended the run.
 	//
 	// The stub sleeps 30s after turn/start — longer than the 10s outer ctx — so
 	// the ONLY way Run can return a *TurnTimeoutError is genuine 25ms preemption:
-	// a runner that ignored the per-turn deadline and blocked on the subprocess
+	// a runner that ignored the silence deadline and blocked on the subprocess
 	// would instead hit the 10s outer ctx and surface a context-deadline error
 	// (errors.As=false), failing the test. There is no subprocess-exit point
 	// inside the window that a non-preemptive runner could ride to a passing
@@ -2609,8 +2615,8 @@ for line in sys.stdin:
 	}
 	// Run must return BEFORE the outer ctx fires — that is the "without waiting
 	// for the outer context" property in the test name. te.Elapsed (below) proves
-	// the turn deadline preempted promptly, but it is measured from turn start and
-	// cannot see time Run spends AFTER the turn in process termination /
+	// the silence deadline preempted promptly, but it cannot see time Run spends
+	// AFTER the turn in process termination /
 	// cmd.Wait(): if that cleanup rode the 10s outer ctx to expiry,
 	// classifyAppServerOutcome wraps the same *TurnTimeoutError in a
 	// *TimeoutError (codex_app_server.go), whose Unwrap still satisfies the
@@ -2620,18 +2626,13 @@ for line in sys.stdin:
 	if errors.As(err, &runTimeout) {
 		t.Fatalf("Run error = %T %[1]v, want bare *TurnTimeoutError without outer-run *TimeoutError wrapper", err)
 	}
-	// Assert promptness on TurnTimeoutError.Elapsed, which the runner measures as
-	// time.Since(turnStarted) (codex_app_server.go) — turnStarted is captured
-	// AFTER the initialize/thread/turn handshake, not before Run, so this bound
-	// excludes Python interpreter boot + handshake latency. The old before-Run
-	// elapsed bound rode subprocess startup (the #587/#598 flake class, #602); a
-	// turn-start-relative measurement verifies only that the 25ms deadline
-	// preempts the 10s outer ctx. The deadline fires almost immediately once the
-	// turn is live, so a 2s bound is ~80x the budget (ample -race headroom) yet
-	// far below the 10s ctx — it still catches a runner that detected the turn
-	// timeout but returned late instead of preempting promptly.
+	// TurnTimeoutError.Elapsed is measured from the last accepted app-server
+	// frame. That excludes Python interpreter boot + handshake latency and pins
+	// the corrected silence semantics. A 2s bound is ~80x the budget (ample
+	// -race headroom) yet far below the 10s outer ctx, so it still catches a
+	// runner that detected the turn timeout but returned late.
 	if te.Elapsed >= 2*time.Second {
-		t.Fatalf("TurnTimeoutError.Elapsed = %s, want 25ms turn-deadline preemption measured from turn start (< 2s, well under the 10s outer ctx)", te.Elapsed)
+		t.Fatalf("TurnTimeoutError.Elapsed = %s, want 25ms stream-silence preemption (< 2s, well under the 10s outer ctx)", te.Elapsed)
 	}
 }
 

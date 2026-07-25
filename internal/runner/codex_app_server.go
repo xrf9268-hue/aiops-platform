@@ -295,20 +295,20 @@ type appServerClient struct {
 	// operator's free-text codex.command, and surfaces on /api/v1/state so an
 	// operator can tell which model produced a run (#977). Empty when the
 	// app-server omits it; the dashboard renders that as "unknown".
-	agentModel          string
-	lastMessage         string
-	runtimeEvents       []task.RuntimeEvent
-	runtimeEventSink    func(task.RuntimeEvent)
-	phaseTransitionSink func(from, to task.RunAttemptPhase)
-	refreshIssueState   IssueStateRefresher
-	tools               DynamicToolSet
-	turnTimeoutMs       int
-	readTimeoutMs       int
-	stallTimeoutMs      int
-	approvalPolicy      any
-	lastTerminal        time.Time
-	lastRuntimeEvent    string
-	issueExitState      *IssueStateSnapshot
+	agentModel            string
+	lastMessage           string
+	runtimeEvents         []task.RuntimeEvent
+	runtimeEventSink      func(task.RuntimeEvent)
+	phaseTransitionSink   func(from, to task.RunAttemptPhase)
+	refreshIssueState     IssueStateRefresher
+	tools                 DynamicToolSet
+	turnTimeoutMs         int
+	readTimeoutMs         int
+	stallTimeoutMs        int
+	approvalPolicy        any
+	streamDeadlineArmedAt time.Time
+	lastRuntimeEvent      string
+	issueExitState        *IssueStateSnapshot
 }
 type codexAppServerTextInput struct {
 	Type         string `json:"type"`
@@ -424,18 +424,9 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 		c.recordFirstTurnStarted(threadID, turnID)
 	}
 	c.recordTurnStarted(threadID, turnID, turn)
-	turnCtx := ctx
-	var cancel context.CancelFunc
-	if c.turnTimeoutMs > 0 {
-		turnCtx, cancel = context.WithTimeout(ctx, time.Duration(c.turnTimeoutMs)*time.Millisecond)
-	}
-	turnStarted := time.Now()
-	err = c.awaitTurnCompletion(turnCtx)
-	if cancel != nil {
-		cancel()
-	}
+	err = c.awaitTurnCompletion(ctx)
 	if err != nil {
-		return false, c.classifyTurnError(ctx, err, turnStarted)
+		return false, err
 	}
 	// SPEC §16.5: refresh tracker state between turns so an operator who
 	// cancelled the issue mid-run sees the worker exit after the current turn
@@ -564,20 +555,6 @@ func (c *appServerClient) recordTurnStarted(threadID, turnID string, turn int) {
 	})
 }
 
-// classifyTurnError maps an awaitTurnCompletion failure to the run's returned
-// error: a *StallError and a generic error pass through unchanged; a per-turn
-// deadline that fired while the outer run context is still alive becomes a
-// *TurnTimeoutError.
-func (c *appServerClient) classifyTurnError(ctx context.Context, err error, turnStarted time.Time) error {
-	var stall *StallError
-	if errors.As(err, &stall) {
-		return err
-	}
-	if c.turnTimeoutMs > 0 && errors.Is(err, context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return &TurnTimeoutError{Timeout: time.Duration(c.turnTimeoutMs) * time.Millisecond, Elapsed: time.Since(turnStarted), Cause: err}
-	}
-	return err
-}
 func (c *appServerClient) summary() string {
 	if strings.TrimSpace(c.lastMessage) != "" {
 		return strings.TrimSpace(c.lastMessage)
