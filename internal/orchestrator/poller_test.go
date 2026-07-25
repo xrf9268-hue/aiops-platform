@@ -1614,6 +1614,29 @@ func TestTaskFromIssuePopulatesIssueRender(t *testing.T) {
 	}
 }
 
+func TestPrioritySortKeyRanksOnlyOneThroughFour(t *testing.T) {
+	tests := []struct {
+		priority int
+		want     int
+	}{
+		{priority: -1, want: 5},
+		{priority: 0, want: 5},
+		{priority: 1, want: 1},
+		{priority: 2, want: 2},
+		{priority: 3, want: 3},
+		{priority: 4, want: 4},
+		{priority: 5, want: 5},
+		{priority: 99, want: 5},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("priority_%d", tt.priority), func(t *testing.T) {
+			if got := prioritySortKey(tt.priority); got != tt.want {
+				t.Fatalf("prioritySortKey(%d) = %d; want %d", tt.priority, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1621,13 +1644,17 @@ func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.
 	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
 		{ID: "unprioritized", Identifier: "LIN-0", State: "Todo", Priority: 0, CreatedAt: mustTime("2026-05-14T00:00:00Z")},
 		{ID: "later-high", Identifier: "LIN-9", State: "Todo", Priority: 2, CreatedAt: mustTime("2026-05-17T00:00:00Z")},
+		{ID: "priority-three", Identifier: "LIN-3", State: "Todo", Priority: 3, CreatedAt: mustTime("2026-05-13T00:00:00Z")},
+		{ID: "priority-four", Identifier: "LIN-4", State: "Todo", Priority: 4, CreatedAt: mustTime("2026-05-12T00:00:00Z")},
 		{ID: "middle-tie-b", Identifier: "LIN-B", State: "Todo", Priority: 1, CreatedAt: mustTime("2026-05-16T00:00:00Z")},
 		{ID: "oldest", Identifier: "LIN-1", State: "Todo", Priority: 1, CreatedAt: mustTime("2026-05-15T00:00:00Z")},
 		{ID: "offset-newer", Identifier: "LIN-O", State: "Todo", Priority: 1, CreatedAt: mustTime("2026-05-15T01:00:00+02:00")},
 		{ID: "middle-tie-a", Identifier: "LIN-A", State: "Todo", Priority: 1, CreatedAt: mustTime("2026-05-16T00:00:00Z")},
+		{ID: "invalid-negative", Identifier: "BAD-Z", State: "Todo", Priority: -1, CreatedAt: mustTime("2026-05-16T00:00:00Z")},
+		{ID: "invalid-six", Identifier: "BAD-A", State: "Todo", Priority: 6, CreatedAt: mustTime("2026-05-16T00:00:00Z")},
 	}}
 	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
-	orch := New(NewOrchestratorState(30000, 6), Deps{
+	orch := New(NewOrchestratorState(30000, 10), Deps{
 		Dispatcher: dispatcher,
 		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
@@ -1640,9 +1667,20 @@ func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
-	waitForDispatcherCount(t, dispatcher, 6)
+	waitForDispatcherCount(t, dispatcher, 10)
 	got := dispatcher.issueIDs()
-	want := []string{"offset-newer", "oldest", "middle-tie-a", "middle-tie-b", "later-high", "unprioritized"}
+	want := []string{
+		"offset-newer",
+		"oldest",
+		"middle-tie-a",
+		"middle-tie-b",
+		"later-high",
+		"priority-three",
+		"priority-four",
+		"unprioritized",
+		"invalid-six",
+		"invalid-negative",
+	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("dispatch order = %v, want %v", got, want)
