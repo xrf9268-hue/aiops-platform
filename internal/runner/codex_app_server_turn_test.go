@@ -19,8 +19,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -255,19 +257,113 @@ func TestAwaitTurnCompletion_ServerRequestDeclinedIsInputRequired(t *testing.T) 
 	}
 }
 
-func TestAwaitTurnCompletion_RequestUserInputIsInputRequired(t *testing.T) {
+func TestAwaitTurnCompletion_AutoAnswersRecognizedMCPQuestionsAtomically(t *testing.T) {
 	c, stdin := newTurnLoopClient(t, []string{
-		`{"id":3,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"q1"}]}}`,
+		`{"id":3,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"mcp_tool_call_approval_session","options":[{"label":"Approve Once"},{"label":"Approve this Session"},{"label":"Deny"}]},{"id":"mcp_tool_call_approval_once","options":[{"label":"Allow this tool"},{"label":"Approve Once"}]},{"id":"mcp_tool_call_approval_allow","options":[{"label":"Deny"},{"label":"  ALLOW for this request  "}]},{"id":"mcp_tool_call_approval_approve","options":[{"label":"Deny"},{"label":"  approve for this repository  "}]}]}}`,
+		`{"method":"turn/completed","params":{}}`,
 	})
-	err := c.awaitTurnCompletion(context.Background())
-	if !IsInputRequired(err) {
-		t.Fatalf("awaitTurnCompletion() = %v; want *InputRequiredError", err)
+	if err := c.awaitTurnCompletion(context.Background()); err != nil {
+		t.Fatalf("awaitTurnCompletion() = %v; want nil", err)
 	}
-	if got, want := runtimeEventNames(c), []string{task.EventTurnInputRequired}; !slices.Equal(got, want) {
+	if got, want := runtimeEventNames(c), []string{task.EventApprovalAutoApproved, task.EventTurnCompleted}; !slices.Equal(got, want) {
 		t.Errorf("runtime events = %v; want %v", got, want)
 	}
-	if reply := stdin.String(); !strings.Contains(reply, nonInteractiveInputReply) {
-		t.Errorf("user-input reply = %q; want it to carry the non-interactive answer", reply)
+
+	var reply map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(stdin.Bytes()), &reply); err != nil {
+		t.Fatalf("decode single user-input reply %q: %v", stdin.String(), err)
+	}
+	wantResult := map[string]any{"answers": map[string]any{
+		"mcp_tool_call_approval_session": map[string]any{"answers": []any{"Approve this Session"}},
+		"mcp_tool_call_approval_once":    map[string]any{"answers": []any{"Approve Once"}},
+		"mcp_tool_call_approval_allow":   map[string]any{"answers": []any{"  ALLOW for this request  "}},
+		"mcp_tool_call_approval_approve": map[string]any{"answers": []any{"  approve for this repository  "}},
+	}}
+	if got := reply["result"]; !reflect.DeepEqual(got, wantResult) {
+		t.Fatalf("user-input result = %#v; want %#v", got, wantResult)
+	}
+	if reply["jsonrpc"] != "2.0" || reply["id"] != float64(3) {
+		t.Errorf("user-input reply envelope = %#v; want jsonrpc 2.0 and id 3", reply)
+	}
+	eventPayload, _ := c.runtimeEvents[0].Payload.(map[string]any)
+	if got := eventPayload["method"]; got != "item/tool/requestUserInput" {
+		t.Errorf("approval_auto_approved method = %#v; want item/tool/requestUserInput", got)
+	}
+	if got := eventPayload["decision"]; got != "Approve this Session" {
+		t.Errorf("approval_auto_approved decision = %#v; want Approve this Session", got)
+	}
+	wireResult, _ := json.Marshal(reply["result"])
+	eventResult, _ := json.Marshal(eventPayload["result"])
+	if !bytes.Equal(eventResult, wireResult) {
+		t.Errorf("approval_auto_approved result = %s; want wire result %s", eventResult, wireResult)
+	}
+}
+
+func TestAwaitTurnCompletion_UnsafeUserInputWritesNothing(t *testing.T) {
+	recognized := `{"id":"mcp_tool_call_approval_ok","options":[{"label":"Approve this Session"}]}`
+	tests := []struct {
+		name   string
+		policy any
+		params string
+	}{
+		{
+			name:   "generic Allow Deny",
+			policy: "never",
+			params: `{"questions":[{"id":"generic-question","options":[{"label":"Allow"},{"label":"Deny"}]}]}`,
+		},
+		{
+			name:   "freeform",
+			policy: "never",
+			params: `{"questions":[{"id":"freeform-question","options":null}]}`,
+		},
+		{name: "empty questions", policy: "never", params: `{"questions":[]}`},
+		{
+			name:   "malformed question",
+			policy: "never",
+			params: `{"questions":[{"id":7,"options":[{"label":"Approve Once"}]}]}`,
+		},
+		{
+			name:   "near miss approval id",
+			policy: "never",
+			params: `{"questions":[{"id":"x-mcp_tool_call_approval_call-1","options":[{"label":"Approve this Session"}]}]}`,
+		},
+		{
+			name:   "mixed generic question",
+			policy: "never",
+			params: `{"questions":[` + recognized + `,{"id":"generic-question","options":[{"label":"Approve Once"}]}]}`,
+		},
+		{
+			name:   "mixed MCP question without approval option",
+			policy: "never",
+			params: `{"questions":[` + recognized + `,{"id":"mcp_tool_call_approval_denied","options":[{"label":"Deny"}]}]}`,
+		},
+		{name: "on request", policy: "on-request", params: `{"questions":[` + recognized + `]}`},
+		{name: "on failure", policy: "on-failure", params: `{"questions":[` + recognized + `]}`},
+		{name: "untrusted", policy: "untrusted", params: `{"questions":[` + recognized + `]}`},
+		{name: "case changed never", policy: "Never", params: `{"questions":[` + recognized + `]}`},
+		{
+			name:   "granular",
+			policy: map[string]any{"granular": map[string]any{"sandbox_approval": true}},
+			params: `{"questions":[` + recognized + `]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, stdin := newTurnLoopClient(t, []string{
+				`{"id":3,"method":"item/tool/requestUserInput","params":` + tt.params + `}`,
+			}, func(c *appServerClient) { c.approvalPolicy = tt.policy })
+			err := c.awaitTurnCompletion(context.Background())
+			var inputErr *InputRequiredError
+			if !errors.As(err, &inputErr) || inputErr.Method != "item/tool/requestUserInput" {
+				t.Fatalf("awaitTurnCompletion() = %v; want item/tool/requestUserInput *InputRequiredError", err)
+			}
+			if got, want := runtimeEventNames(c), []string{task.EventTurnInputRequired}; !slices.Equal(got, want) {
+				t.Errorf("runtime events = %v; want %v", got, want)
+			}
+			if stdin.Len() != 0 {
+				t.Errorf("user-input wire output = %q; want no fabricated, partial, or error response", stdin.String())
+			}
+		})
 	}
 }
 

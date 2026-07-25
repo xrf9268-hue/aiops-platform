@@ -640,8 +640,8 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerTreatsUserInputRequestAsInputBlocked(t *testing.T) {
-	codexAppServerStubScript(t, `
+func TestCodexAppServerRunnerAutoAnswersRecognizedMCPUserInput(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
 import json
 log=open(os.environ['CODEX_STDIN_LOG'], 'w')
 for line in sys.stdin:
@@ -653,12 +653,56 @@ for line in sys.stdin:
         print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
     elif msg.get('method') == 'turn/start':
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        print(json.dumps({'jsonrpc': '2.0', 'id': 'input-1', 'method': 'item/tool/requestUserInput', 'params': {'questions': [{'id': 'q1', 'label': 'Need operator'}]}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'input-1', 'method': 'item/tool/requestUserInput', 'params': {'questions': [{'id': 'mcp_tool_call_approval_call-1', 'options': [{'label': 'Approve Once'}, {'label': 'Approve this Session'}, {'label': 'Deny'}]}]}}), flush=True)
     elif msg.get('id') == 'input-1':
         answers = msg.get('result', {}).get('answers', {})
-        if 'q1' not in answers:
-            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'missing non-interactive answer', 'got': msg}}), flush=True)
+        if answers != {'mcp_tool_call_approval_call-1': {'answers': ['Approve this Session']}}:
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected MCP approval answer', 'got': msg}}), flush=True)
+        else:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'MCP approval handled'}}), flush=True)
         break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "recognized MCP approval")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "MCP approval handled" {
+		t.Fatalf("Summary = %q; want MCP approval handled", res.Summary)
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventApprovalAutoApproved)
+	if len(events) != 1 {
+		t.Fatalf("approval_auto_approved events = %d; want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "method"); got != "item/tool/requestUserInput" {
+		t.Fatalf("approval_auto_approved method = %#v; want item/tool/requestUserInput", got)
+	}
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stdin), `"mcp_tool_call_approval_call-1":{"answers":["Approve this Session"]}`) {
+		t.Fatalf("stdin missing exact MCP approval answer: %s", stdin)
+	}
+}
+
+func TestCodexAppServerRunnerTreatsUserInputRequestAsInputBlocked(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'input-1', 'method': 'item/tool/requestUserInput', 'params': {'questions': [{'id': 'generic-question', 'options': [{'label': 'Allow'}, {'label': 'Deny'}]}]}}), flush=True)
     elif msg.get('method') == 'initialized':
         pass
 `)
@@ -669,6 +713,19 @@ for line in sys.stdin:
 		t.Fatalf("Run error = %v, want input required", err)
 	}
 	assertInputRequiredEvent(t, res.RuntimeEvents, "item/tool/requestUserInput")
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(stdin)), "\n") {
+		var message map[string]any
+		if decodeErr := json.Unmarshal([]byte(line), &message); decodeErr != nil {
+			t.Fatalf("decode stdin line %q: %v", line, decodeErr)
+		}
+		if message["id"] == "input-1" {
+			t.Fatalf("stdin contains fabricated user-input response: %s", stdin)
+		}
+	}
 }
 
 func TestCodexAppServerRunnerTreatsMCPElicitationAsInputBlocked(t *testing.T) {
@@ -2838,8 +2895,8 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 	inputResult, ok := protocolServerRequestResult("item/tool/requestUserInput", map[string]any{
 		"params": map[string]any{"questions": []any{map[string]any{"id": "q1"}}},
 	}, "on-request")
-	if !ok || inputResult["answers"] == nil {
-		t.Fatalf("user input result = %#v, %v; want answers payload", inputResult, ok)
+	if ok || inputResult != nil {
+		t.Fatalf("user input result = %#v, %v; want dedicated input-required handling without generic result", inputResult, ok)
 	}
 	elicitationResult, ok := protocolServerRequestResult("mcpServer/elicitation/request", map[string]any{}, "never")
 	if !ok || elicitationResult["action"] != "decline" {

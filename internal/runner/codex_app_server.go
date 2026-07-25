@@ -23,10 +23,7 @@ import (
 // drives multiple coding-agent turns within one worker session.
 type CodexAppServerRunner struct{}
 
-const (
-	codexAppServerOutputPath = ".aiops/CODEX_APP_SERVER_OUTPUT.txt"
-	nonInteractiveInputReply = "This is a non-interactive session. Operator input is unavailable."
-)
+const codexAppServerOutputPath = ".aiops/CODEX_APP_SERVER_OUTPUT.txt"
 
 // PromptPath is the workdir-relative location of the rendered prompt the
 // worker writes before invoking the runner.
