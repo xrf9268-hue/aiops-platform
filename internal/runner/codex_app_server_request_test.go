@@ -9,6 +9,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
@@ -177,7 +178,7 @@ func TestRequest_ServerRequestWithCollidingIDIsNotMistakenForResponse(t *testing
 // TestRequest_InputRequiredServerRequestSurfacesInputRequired mirrors the turn
 // loop's SPEC §10.4 semantics on the request path: an explicit user-input
 // server request during an awaited RPC ends it with an InputRequiredError
-// (after replying on the wire) instead of silently declining and hanging on.
+// without fabricating a wire answer.
 func TestRequest_InputRequiredServerRequestSurfacesInputRequired(t *testing.T) {
 	c, stdin := newTurnLoopClient(t, []string{
 		`{"jsonrpc":"2.0","id":5,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"q1"}]}}`,
@@ -186,8 +187,14 @@ func TestRequest_InputRequiredServerRequestSurfacesInputRequired(t *testing.T) {
 	if !IsInputRequired(err) {
 		t.Fatalf("request() err = %v; want an InputRequiredError for item/tool/requestUserInput", err)
 	}
-	if !strings.Contains(stdin.String(), `"id":5`) {
-		t.Errorf("stdin = %q; want a wire reply to the user-input request before surfacing input-required", stdin.String())
+	for _, line := range strings.Split(strings.TrimSpace(stdin.String()), "\n") {
+		var message map[string]any
+		if decodeErr := json.Unmarshal([]byte(line), &message); decodeErr != nil {
+			t.Fatalf("decode stdin line %q: %v", line, decodeErr)
+		}
+		if message["id"] == float64(5) {
+			t.Errorf("stdin = %q; want no wire reply to the user-input request", stdin.String())
+		}
 	}
 }
 

@@ -216,6 +216,9 @@ func (c *appServerClient) handleTurnMethod(msg map[string]any, method string) (b
 // approval or explicit input request as operator-required input. Mirrors
 // upstream maybe_handle_approval_request.
 func (c *appServerClient) handleServerRequest(msg map[string]any, method string) (bool, error) {
+	if method == toolUserInputRequestMethod {
+		return c.handleToolUserInputRequest(msg)
+	}
 	if err := c.replyServerRequest(msg); err != nil {
 		return true, err
 	}

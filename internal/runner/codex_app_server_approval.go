@@ -13,10 +13,12 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 )
 
+const toolUserInputRequestMethod = "item/tool/requestUserInput"
+
 func (c *appServerClient) replyServerRequest(msg map[string]any) error {
 	method, _ := msg["method"].(string)
 	if result, ok := protocolServerRequestResult(method, msg, c.approvalPolicy); ok {
-		if err := c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": result}); err != nil {
+		if err := c.replyServerRequestResult(msg, result); err != nil {
 			return err
 		}
 		if protocolServerRequestAutoApproved(method, c.approvalPolicy) {
@@ -26,6 +28,9 @@ func (c *appServerClient) replyServerRequest(msg map[string]any) error {
 	}
 	return c.sendJSONRPCError(msg["id"], -32601, "Method not found: "+method)
 }
+func (c *appServerClient) replyServerRequestResult(msg map[string]any, result map[string]any) error {
+	return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": result})
+}
 func (c *appServerClient) recordApprovalAutoApproved(method string, msg map[string]any, result map[string]any) {
 	params, _ := msg["params"].(map[string]any)
 	payload := normalizeRuntimePayload(params)
@@ -34,6 +39,9 @@ func (c *appServerClient) recordApprovalAutoApproved(method string, msg map[stri
 	}
 	payload["method"] = method
 	payload["result"] = normalizeRuntimeValue(result)
+	if method == toolUserInputRequestMethod {
+		payload["decision"] = "Approve this Session"
+	}
 	c.recordRuntimeEvent(task.EventApprovalAutoApproved, c.withRuntimeContext(payload))
 }
 func (c *appServerClient) sendJSONRPCError(id any, code int, message string) error {
@@ -48,7 +56,7 @@ func (c *appServerClient) sendJSONRPCError(id any, code int, message string) err
 }
 func inputRequiredServerRequest(method string) bool {
 	switch method {
-	case "item/tool/requestUserInput", "mcpServer/elicitation/request":
+	case "mcpServer/elicitation/request":
 		return true
 	default:
 		return false
@@ -114,8 +122,6 @@ func protocolServerRequestResult(method string, msg map[string]any, approvalPoli
 			return map[string]any{"decision": "allow"}, true
 		}
 		return map[string]any{"decision": "deny"}, true
-	case "item/tool/requestUserInput":
-		return protocolUserInputResult(msg), true
 	case "mcpServer/elicitation/request":
 		return map[string]any{"action": "decline", "content": nil}, true
 	default:
@@ -173,20 +179,98 @@ func approvalRuleEnabled(rules map[string]any, key string) bool {
 	return enabled
 }
 
-func protocolUserInputResult(msg map[string]any) map[string]any {
+func (c *appServerClient) handleToolUserInputRequest(msg map[string]any) (bool, error) {
+	result, ok := protocolToolUserInputApprovalResult(msg, c.approvalPolicy)
+	if !ok {
+		c.recordInputRequiredMessage(toolUserInputRequestMethod, msg)
+		return true, &InputRequiredError{Method: toolUserInputRequestMethod}
+	}
+	if err := c.replyServerRequestResult(msg, result); err != nil {
+		return true, err
+	}
+	c.recordApprovalAutoApproved(toolUserInputRequestMethod, msg, result)
+	return false, nil
+}
+
+func protocolToolUserInputApprovalResult(msg map[string]any, approvalPolicy any) (map[string]any, bool) {
+	policy, ok := approvalPolicy.(string)
+	if !ok || policy != "never" {
+		return nil, false
+	}
 	params, _ := msg["params"].(map[string]any)
-	questions, _ := params["questions"].([]any)
-	answers := make(map[string]any)
+	questions, ok := params["questions"].([]any)
+	if !ok || len(questions) == 0 {
+		return nil, false
+	}
+	answers := make(map[string]any, len(questions))
 	for _, question := range questions {
-		q, _ := question.(map[string]any)
-		id, _ := q["id"].(string)
-		id = strings.TrimSpace(id)
-		if id == "" {
+		id, label, valid := protocolToolUserInputApprovalAnswer(question)
+		if !valid {
+			return nil, false
+		}
+		answers[id] = map[string]any{"answers": []string{label}}
+	}
+	return map[string]any{"answers": answers}, true
+}
+
+func protocolToolUserInputApprovalAnswer(question any) (string, string, bool) {
+	payload, ok := question.(map[string]any)
+	if !ok {
+		return "", "", false
+	}
+	id, ok := payload["id"].(string)
+	if !ok || !strings.HasPrefix(id, "mcp_tool_call_approval_") {
+		return "", "", false
+	}
+	options, ok := payload["options"].([]any)
+	if !ok {
+		return "", "", false
+	}
+	label, ok := protocolToolUserInputApprovalOption(options)
+	return id, label, ok
+}
+
+func protocolToolUserInputApprovalOption(options []any) (string, bool) {
+	labels := protocolToolUserInputOptionLabels(options)
+	for _, preferred := range []string{"Approve this Session", "Approve Once"} {
+		if label, ok := protocolToolUserInputExactOption(labels, preferred); ok {
+			return label, true
+		}
+	}
+	for _, label := range labels {
+		if protocolToolUserInputApprovalLabel(label) {
+			return label, true
+		}
+	}
+	return "", false
+}
+
+func protocolToolUserInputOptionLabels(options []any) []string {
+	labels := make([]string, 0, len(options))
+	for _, option := range options {
+		payload, ok := option.(map[string]any)
+		if !ok {
 			continue
 		}
-		answers[id] = map[string]any{"answers": []string{nonInteractiveInputReply}}
+		if label, ok := payload["label"].(string); ok {
+			labels = append(labels, label)
+		}
 	}
-	return map[string]any{"answers": answers}
+	return labels
+}
+
+func protocolToolUserInputExactOption(labels []string, preferred string) (string, bool) {
+	for _, label := range labels {
+		if label == preferred {
+			return label, true
+		}
+	}
+	return "", false
+}
+
+func protocolToolUserInputApprovalLabel(label string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(label))
+	return strings.HasPrefix(normalized, "approve") || strings.HasPrefix(normalized, "allow")
 }
 func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[string]any) error {
 	select {
