@@ -132,7 +132,7 @@ over stdio).
 | `codex.approval_policy` | map | `granular` with every flag `false` (auto-reject all approval prompts) | Sent as the app-server approval policy | — |
 | `codex.thread_sandbox` | string | `workspace-write` | `thread/start` sandbox string; also the single knob the per-turn policy derives from (DEVIATIONS D32) | — |
 | `codex.turn_sandbox_policy` | typed map | derived from `thread_sandbox` | Explicit per-turn `sandboxPolicy` override; `type` is required (`dangerFullAccess`, `readOnly`, `externalSandbox`, `workspaceWrite`), with per-type required fields (`writableRoots`, `networkAccess`, …) | strict per-type field checking; legacy `mode:`-style shapes rejected |
-| `codex.turn_timeout_ms` | int | `3600000` (1h) | Wall-clock cap for a single turn; exceeding it cancels the turn and surfaces a turn-timeout on the retry path | > 0 |
+| `codex.turn_timeout_ms` | int | `3600000` (1h) | Maximum silence interval while a turn stream is active; each accepted app-server output frame resets it, and exceeding it surfaces a turn-timeout on the retry path (not a total turn-runtime cap) | > 0 |
 | `codex.read_timeout_ms` | int | `5000` | Per-read transport budget while waiting for one protocol line outside a stall-governed turn (handshake/control reads); inside a turn the stall budget supersedes it | > 0 |
 | `codex.stall_timeout_ms` | int | `300000` (5m) | Stall detection (SPEC §8.5 Part A): max time since the last agent event before the turn is declared stalled, terminated, and retried; `0` disables | ≥ 0 |
 | `codex.linear_graphql.allow_mutations` | bool | `false` | With the default, every GraphQL mutation through the agent-visible `linear_graphql` tool is rejected before any request leaves the process; reads are unrestricted | — |

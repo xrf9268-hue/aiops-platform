@@ -146,6 +146,24 @@ func TestAwaitTurnCompletion_NotificationRecordedThenContinues(t *testing.T) {
 	}
 }
 
+func TestAwaitTurnCompletion_LocalEventSinkTimeIsNotStreamSilence(t *testing.T) {
+	c, _ := newTurnLoopClient(t, []string{
+		`{"method":"item/agentMessage","params":{"message":"thinking"}}`,
+		`{"method":"turn/completed","params":{}}`,
+	}, func(c *appServerClient) {
+		c.turnTimeoutMs = 20
+		c.runtimeEventSink = func(event task.RuntimeEvent) {
+			if event.Event == task.EventNotification {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	})
+
+	if err := c.awaitTurnCompletion(context.Background()); err != nil {
+		t.Fatalf("awaitTurnCompletion() = %v; want local sink time excluded from stream silence", err)
+	}
+}
+
 func TestAwaitTurnCompletion_OtherMessageRecordedThenContinues(t *testing.T) {
 	c, _ := newTurnLoopClient(t, []string{
 		`{"foo":"bar"}`,
@@ -277,14 +295,14 @@ func TestReadTurnMessage_PreReadBudgetExhaustedReturnsStall(t *testing.T) {
 	// When the stall budget is already spent at the top of an iteration,
 	// readTurnMessage returns a *StallError WITHOUT reading — distinct from the
 	// in-read timeout, which carries a non-nil Cause. The live loop resets
-	// lastTerminal every iteration so this guard is defensive; drive the helper
+	// streamDeadlineArmedAt every iteration so this guard is defensive; drive the helper
 	// directly to pin both the Cause==nil discriminator and the no-read
-	// short-circuit (awaitTurnCompletion resets lastTerminal on entry, so the
+	// short-circuit (awaitTurnCompletion resets streamDeadlineArmedAt on entry, so the
 	// branch is unreachable through the full loop).
 	c, _ := newTurnLoopClient(t, []string{`{"method":"turn/completed","params":{}}`},
 		func(c *appServerClient) { c.stallTimeoutMs = 10 })
-	c.lastTerminal = time.Now().Add(-time.Second) // budget already exhausted
-	msg, raw, stallBudget, err := c.readTurnMessage(context.Background())
+	c.streamDeadlineArmedAt = time.Now().Add(-time.Second) // budget already exhausted
+	msg, raw, err := c.readTurnMessage(context.Background())
 	var stall *StallError
 	if !errors.As(err, &stall) {
 		t.Fatalf("readTurnMessage() err = %v; want *StallError on an already-spent budget", err)
@@ -295,9 +313,6 @@ func TestReadTurnMessage_PreReadBudgetExhaustedReturnsStall(t *testing.T) {
 	if msg != nil || raw != nil {
 		t.Errorf("readTurnMessage() msg=%v raw=%v; want nil,nil (no read performed)", msg, raw)
 	}
-	if got, want := stallBudget, 10*time.Millisecond; got != want {
-		t.Errorf("readTurnMessage() stallBudget = %v; want %v", got, want)
-	}
 	// The scanner is untouched: the unread turn/completed line is still there,
 	// proving readTurnMessage short-circuited before reading.
 	if line, lerr := c.readLine(context.Background()); lerr != nil || !strings.Contains(string(line), "turn/completed") {
@@ -305,20 +320,41 @@ func TestReadTurnMessage_PreReadBudgetExhaustedReturnsStall(t *testing.T) {
 	}
 }
 
-func TestHandleTurnNotification_LateNotificationSurfacesStall(t *testing.T) {
-	// A notification dispatched after the stall budget has already elapsed ends
-	// the turn with a *StallError. In the live loop the read deadline is tied to
-	// the same budget, so the read-budget stall (classifyTurnReadError) normally
-	// fires first and this notification-path branch is defensive; drive the
-	// extracted handler directly to pin it without relying on read timing.
-	c := &appServerClient{out: io.Discard, stallTimeoutMs: 10}
-	c.lastTerminal = time.Now().Add(-time.Second) // already past the 10ms budget
-	done, err := c.handleTurnNotification(map[string]any{"method": "item/agentMessage"}, "item/agentMessage")
-	if !done {
-		t.Fatalf("handleTurnNotification() done = false; want true when the stall budget is already spent")
+func TestReadTurnMessage_PreCanceledParentWinsSpentLocalBudget(t *testing.T) {
+	c := &appServerClient{
+		readCh:                make(chan []byte),
+		out:                   io.Discard,
+		turnTimeoutMs:         1,
+		streamDeadlineArmedAt: time.Now().Add(-time.Second),
+		approvalPolicy:        "never",
 	}
-	if !IsStall(err) {
-		t.Fatalf("handleTurnNotification() err = %v; want *StallError", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	msg, raw, err := c.readTurnMessage(ctx)
+	if msg != nil || raw != nil {
+		t.Fatalf("readTurnMessage() msg=%v raw=%q; want nil,nil after parent cancellation", msg, raw)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("readTurnMessage() = %T %[1]v; want context.Canceled", err)
+	}
+	if IsTurnTimeout(err) || IsStall(err) || IsReadTimeout(err) || IsTimeout(err) {
+		t.Fatalf("readTurnMessage() = %T %[1]v; want parent cancellation without timeout relabeling", err)
+	}
+}
+
+func TestHandleTurnNotification_DoesNotReclassifyAlreadyReadFrame(t *testing.T) {
+	// readTurnMessage owns the stream deadline. Once it returns a frame, local
+	// scheduler/handler delay must not recheck wall time and relabel that
+	// already-received output as silence.
+	c := &appServerClient{out: io.Discard, stallTimeoutMs: 10}
+	c.streamDeadlineArmedAt = time.Now().Add(-time.Second)
+	done, err := c.handleTurnNotification(map[string]any{"method": "item/agentMessage"}, "item/agentMessage")
+	if done {
+		t.Fatalf("handleTurnNotification() done = true; want already-read notification to continue")
+	}
+	if err != nil {
+		t.Fatalf("handleTurnNotification() err = %v; want nil for already-read notification", err)
 	}
 }
 
@@ -343,5 +379,149 @@ func TestAwaitTurnCompletion_StallTimeoutWhenStreamSilent(t *testing.T) {
 	err := c.awaitTurnCompletion(context.Background())
 	if !IsStall(err) {
 		t.Fatalf("awaitTurnCompletion() = %v; want *StallError when the stream goes silent", err)
+	}
+}
+
+func TestAwaitTurnCompletion_EarliestStreamDeadlineKeepsTypedFailure(t *testing.T) {
+	tests := []struct {
+		name      string
+		turnMs    int
+		stallMs   int
+		wantTurn  bool
+		wantStall bool
+	}{
+		{name: "turn before stall", turnMs: 20, stallMs: 200, wantTurn: true},
+		{name: "stall before turn", turnMs: 200, stallMs: 20, wantStall: true},
+		{name: "equal budgets preserve turn precedence", turnMs: 20, stallMs: 20, wantTurn: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &appServerClient{
+				readCh:           make(chan []byte),
+				out:              io.Discard,
+				approvalPolicy:   "never",
+				turnTimeoutMs:    tt.turnMs,
+				stallTimeoutMs:   tt.stallMs,
+				lastRuntimeEvent: task.EventTurnStarted,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			err := c.awaitTurnCompletion(ctx)
+			if got := IsTurnTimeout(err); got != tt.wantTurn {
+				t.Fatalf("IsTurnTimeout(%v) = %v; want %v", err, got, tt.wantTurn)
+			}
+			if got := IsStall(err); got != tt.wantStall {
+				t.Fatalf("IsStall(%v) = %v; want %v", err, got, tt.wantStall)
+			}
+		})
+	}
+}
+
+func TestAwaitTurnCompletion_ParentCancellationIsNotRelabeled(t *testing.T) {
+	c := &appServerClient{
+		readCh:         make(chan []byte),
+		out:            io.Discard,
+		approvalPolicy: "never",
+		readTimeoutMs:  30000,
+		turnTimeoutMs:  30000,
+		stallTimeoutMs: 0,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(20*time.Millisecond, func() {
+		defer recoverPanic("runner.test_turn_parent_cancel")
+		cancel()
+	})
+	defer timer.Stop()
+
+	start := time.Now()
+	err := c.awaitTurnCompletion(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("awaitTurnCompletion() = %T %[1]v; want context.Canceled", err)
+	}
+	if IsTurnTimeout(err) || IsStall(err) || IsReadTimeout(err) || IsTimeout(err) || isAppServerReadTimeout(err) {
+		t.Fatalf("awaitTurnCompletion() = %T %[1]v; want parent cancellation without timeout relabeling", err)
+	}
+	if elapsed := time.Since(start); elapsed >= 5*time.Second {
+		t.Fatalf("parent cancellation returned after %s; want prompt return under 5s", elapsed)
+	}
+}
+
+func TestResolveTurnReadResult_ParentCancellationWinsReadyLocalResult(t *testing.T) {
+	tests := []struct {
+		name       string
+		msg        map[string]any
+		raw        []byte
+		readCtxErr error
+		readErr    error
+	}{
+		{name: "valid frame", msg: map[string]any{"method": "turn/completed"}},
+		{name: "malformed frame", raw: []byte(`{"bad":`), readErr: errors.New("decode failed")},
+		{name: "read timeout", readErr: &appServerReadTimeoutError{afterMs: 10}},
+		{name: "turn deadline", readCtxErr: context.DeadlineExceeded, readErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &appServerClient{streamDeadlineArmedAt: time.Now()}
+			msg, raw, err := c.resolveTurnReadResult(
+				tt.msg,
+				tt.raw,
+				context.Canceled,
+				tt.readCtxErr,
+				tt.readErr,
+				turnStreamDeadline{kind: turnStreamTimeoutTurn, timeout: time.Second},
+			)
+			if msg != nil || raw != nil {
+				t.Fatalf("resolveTurnReadResult() msg=%v raw=%q; want nil,nil after parent cancellation", msg, raw)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("resolveTurnReadResult() = %T %[1]v; want context.Canceled", err)
+			}
+			if IsTurnTimeout(err) || IsStall(err) || IsReadTimeout(err) || IsTimeout(err) || isAppServerReadTimeout(err) {
+				t.Fatalf("resolveTurnReadResult() = %T %[1]v; want parent cancellation without timeout relabeling", err)
+			}
+		})
+	}
+}
+
+func TestAwaitTurnCompletion_OuterDeadlineIsNotRelabeled(t *testing.T) {
+	c := &appServerClient{
+		readCh:         make(chan []byte),
+		out:            io.Discard,
+		approvalPolicy: "never",
+		readTimeoutMs:  30000,
+		turnTimeoutMs:  30000,
+		stallTimeoutMs: 0,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := c.awaitTurnCompletion(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("awaitTurnCompletion() = %T %[1]v; want context.DeadlineExceeded", err)
+	}
+	if IsTurnTimeout(err) || IsStall(err) || IsReadTimeout(err) || IsTimeout(err) || isAppServerReadTimeout(err) {
+		t.Fatalf("awaitTurnCompletion() = %T %[1]v; want outer deadline without local timeout relabeling", err)
+	}
+}
+
+func TestAwaitTurnCompletion_ReadTimeoutDoesNotPreemptStallBudget(t *testing.T) {
+	c := &appServerClient{
+		readCh:         make(chan []byte),
+		out:            io.Discard,
+		approvalPolicy: "never",
+		readTimeoutMs:  1,
+		stallTimeoutMs: 20,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := c.awaitTurnCompletion(ctx)
+	if !IsStall(err) {
+		t.Fatalf("awaitTurnCompletion() = %T %[1]v; want stall timeout despite shorter read timeout", err)
+	}
+	if isAppServerReadTimeout(err) || IsReadTimeout(err) {
+		t.Fatalf("awaitTurnCompletion() = %T %[1]v; want stall timeout distinct from read timeout", err)
 	}
 }
