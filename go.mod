@@ -3,7 +3,7 @@ module github.com/xrf9268-hue/aiops-platform
 go 1.25.12
 
 require (
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/testcontainers/testcontainers-go v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
