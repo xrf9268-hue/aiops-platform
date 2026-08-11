@@ -21,7 +21,7 @@ change a rule here, update its rationale entry there too.
 - [Cross-cutting checklist](#cross-cutting-checklist-when-porting-from-the-elixir-reference) — Elixir-port failure classes + rules for agents
 - [Layout](#layout) · [Build, test, lint](#build-test-lint)
 - [Clean code](#clean-code) — per-PR rules (1–11)
-- [Conventions](#conventions) — gofmt, timeouts, goroutines, secrets, PR size, gates
+- [Conventions](#conventions) — gofmt, timeouts, goroutines, secrets, gates
 - [WORKFLOW.md discovery](#workflowmd-discovery-worker-side) · [Where to read next](#where-to-read-next) · [Safety posture](#safety-posture-for-agents)
 - [`DEVIATIONS.md`](DEVIATIONS.md) — tracked SPEC deviations · [`docs/engineering-rules-rationale.md`](docs/engineering-rules-rationale.md) — rule provenance
 

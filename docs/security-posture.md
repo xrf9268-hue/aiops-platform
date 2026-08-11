@@ -288,8 +288,9 @@ repository:
    supplies a repository-subpath denylist. (The worker `policy.deny_paths` /
    `max_changed_*` gate was removed in #561: it ran post-push, so it could only
    flag — never prevent — a forbidden change.)
-8. Keep changes small enough for reliable review — instruct the agent to keep
-   diffs tight in the prompt, and split oversized PRs at review time.
+8. Keep changes scoped for reliable review — instruct the agent not to bundle
+   unrelated work, and split genuinely independent concerns when that improves
+   ownership or reviewability.
 9. Restrict tracker eligibility to trusted projects, teams, labels, and workflow
    states. Do not let arbitrary tracker items automatically reach the agent.
 10. Prefer project-scoped tracker tools. If `linear_graphql` is available, scope

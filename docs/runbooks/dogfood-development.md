@@ -151,12 +151,11 @@ batch runbook:
 issue -> depends_on -> dependency_type -> ready_gate -> branch/worktree -> PR -> head -> state -> next action
 ```
 
-## Small PR auto-merge
+## Authorized auto-merge
 
 Auto-merge is never a standing grant. It must be authorized for a named scope.
-Even then, it applies only to small PRs:
+Even then, it applies only when every landing gate is satisfied:
 
-- within the review budget
 - no off-limits paths
 - configured verification green
 - independent local reviews clean
@@ -172,7 +171,6 @@ If any condition is missing, leave the PR for human merge.
 Stop unattended dogfood and switch to manual work when:
 
 - a downstream issue needs an unmerged blocker
-- the PR exceeds the small-change review budget
 - the agent touches sensitive paths or ignores scope
 - reviewer output is malformed, non-JSON, timed out, or blocking
 - CI or review threads require design judgment
