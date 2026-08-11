@@ -5,8 +5,8 @@ issues) so the work stays reviewable, parallel where it can be, and safe to
 merge.
 
 > **The per-PR review & merge gates are shared.** Dual diff-only reviewers,
-> `@codex review` convergence, GraphQL review-thread closure, the size-gate
-> three states, the merge / authorized-auto-merge gate list, and regression +
+> `@codex review` convergence, GraphQL review-thread closure, the merge /
+> authorized-auto-merge gate list, and regression +
 > mutation test discipline live once in
 > [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md). This runbook
 > covers only the **batch-orchestration delta** — parallelism, the live ledger,
@@ -22,8 +22,7 @@ runs:
 - **2026-05 ten-issue automated batch** (issues #384–#393). This run added the
   quality-over-throughput lessons now in the shared protocol (post-commit dual
   local review before push, fresh `@codex review` trigger tracking,
-  thread-aware review closure, the three-state size-gate classification with
-  explicit sign-off paths) plus the batch-level pause/resume state recovery and
+  thread-aware review closure) plus the batch-level pause/resume state recovery and
   follow-up capture for late unresolved review threads.
 - **2026-06 continuation / operator-stop follow-through** (#621 / PR #628 and
   #622 / PR #631, with the upstream comparison in PR #625). This run sharpened
@@ -77,10 +76,9 @@ ordering dependency.
    worker's per-state capacity caps are the hard ceiling; your review bandwidth
    is the practical one. Do not open more parallel work than you can drive to
    mergeable without letting reviews rot.
-4. **Parallelism means more small PRs, never bigger ones.** The size budget
-   still applies per PR and is classified/disclosed per
-   [protocol §6](pr-review-merge-protocol.md#6-size-gate-is-a-merge-gate-not-an-loc-reduction-mandate)
-   — it is a gate, not a ceiling that forces LOC cuts at the expense of quality.
+4. **Parallelism does not relax issue boundaries.** Each branch and PR still
+   carries one coherent issue; do not bundle unrelated work merely because the
+   batch is already active.
 
 ## Surface deferrals at the moment you defer, not at the end
 
@@ -128,8 +126,7 @@ issue → branch/worktree → PR → head → state
 (depends_on | dependency_type | ready_gate)
 (triaged | in-progress | draft | CI green | bot-review-pending | review clean |
  threads-resolved | body-updated | metadata-pending | metadata-green |
- warnings-audited | within budget | size-gated: justified overage |
- size-gated: split recommended | mergeable | merged | merged-by-user |
+ warnings-audited | mergeable | merged | merged-by-user |
  deferred→#NNN | skipped)
 ```
 
@@ -137,11 +134,11 @@ This mirrors the per-event status-checklist discipline the harness expects when
 watching PR activity; apply it to the batch as a whole.
 
 For each PR, also track the per-PR ledger facts the protocol already requires
-([protocol §7](pr-review-merge-protocol.md#7-pr-body-is-a-living-ledger)) —
+([protocol §6](pr-review-merge-protocol.md#6-pr-body-is-a-living-ledger)) —
 current head SHA, local validation commands, CI conclusion/run id,
 `@codex review` trigger id + reaction state, unresolved review-thread ids (and
 whether each is resolved/outdated), final `PR Metadata` run id, warning-audit
-result, size-gate classification, and deferral/follow-up links — and keep the
+result and deferral/follow-up links — and keep the
 PR body in sync as the public copy of the same facts.
 
 ## Pause, resume, and external merges
@@ -149,7 +146,7 @@ PR body in sync as the public copy of the same facts.
 Long batches may cross model quota windows or human intervention. Before
 pausing, write down the live ledger: issue, branch/worktree, PR, head SHA, CI
 state, trigger comment id, unresolved thread ids, PR-body freshness,
-`PR Metadata` state, warning-audit state, size-gate state, and next action.
+`PR Metadata` state, warning-audit state, and next action.
 Schedule the wakeup only after that state exists.
 
 On resume, do not trust the paused snapshot. Re-fetch `origin/main`, refresh
@@ -159,7 +156,7 @@ each live issue/PR with `gh`, and reclassify externally changed work:
 - If the head changed, restart local verification and the review gates for that
   head (protocol §3–§5). If the change came from another *active* agent session,
   apply the concurrent-owner probe and increment-only policy first
-  ([protocol §9](pr-review-merge-protocol.md#9-concurrent-sessions-on-one-pr)).
+  ([protocol §8](pr-review-merge-protocol.md#8-concurrent-sessions-on-one-pr)).
 - If a trigger comment is still active, wait for that exact trigger or start a
   fresh review on the current head.
 - If unresolved review follow-up issues were created after merge, link them in
@@ -187,10 +184,10 @@ issues #365–#372 once they pass the gate" — never a standing grant. Approvin
 one merge does not authorize the next.
 
 When auto-merge **is** authorized, apply the full merge gate and hard-stop list
-in [protocol §8](pr-review-merge-protocol.md#8-merge): CI green on the head,
+in [protocol §7](pr-review-merge-protocol.md#7-merge): CI green on the head,
 fresh `@codex review` clean with zero unresolved non-outdated threads, every
-acceptance criterion met or deferred to a tracked issue, classified
-`within budget` and touching no off-limits paths, required reviews
+acceptance criterion met or deferred to a tracked issue, no off-limits paths,
+required reviews
 satisfied, agreed squash method. Native auto-merge enforces only CI + required
 reviews, so confirm the non-check gates yourself immediately before enabling it,
 and re-confirm after any push (a new commit re-opens the `@codex` round).

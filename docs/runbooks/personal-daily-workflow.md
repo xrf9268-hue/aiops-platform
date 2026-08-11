@@ -67,7 +67,6 @@ Checklist before moving an issue to `Todo`:
   so the agent self-limits. This is advisory: neither sandbox layer supplies a
   repository-subpath denylist. Use repository permissions, branch protection,
   required review, and CI path checks when those paths need enforced controls.
-- Size budget: keep the change small (aim for ≤12 files / ≤300 LOC as a review guideline). If a task realistically needs more, split it.
 - Link to the relevant ADR or research doc when the task involves architecture decisions.
 - Dependency class: mark the issue as a `hard dependency`, `soft overlap`, or
   `independent issue`. Do not move hard-dependent or soft-overlap work through
@@ -184,7 +183,7 @@ Skip automation entirely when:
 - the task touches sensitive areas (infra, deploy, migrations, secrets).
 - it is a security-sensitive change or a data migration.
 - requirements are still ambiguous. Use a planning issue instead and only move to `Todo` once the design is settled.
-- the change is large enough that a draft PR would blow well past the ~12-file / ~300-LOC review guideline.
+- the task combines independent concerns that cannot be reviewed coherently as one change.
 
 Decision shortcut:
 

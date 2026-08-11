@@ -272,40 +272,11 @@ activity, sanity-check the next
 `Capture unresolved reviews` workflow run / linked follow-up issues — that
 workflow is a backstop, not a merge substitute.
 
-## 6. Size gate is a merge gate, not an LOC-reduction mandate
-
-The size-gate rule — the three states (`within budget` /
-`size-gated: justified overage` / `size-gated: split recommended`) and the
-principle that correctness/coverage/safety take precedence over LOC compliance
-— is canonical in [`AGENTS.md`](../../AGENTS.md) (the size-gate bullet).
-Classify every PR into exactly one state and
-disclose it in the body; never delete meaningful tests or weaken coverage to
-fit the budget. Never compress formatting, merge unrelated responsibilities, or
-make the code harder to read just to preserve `within budget` status; when the
-smallest readable change plus necessary tests needs more space, classify it as
-`size-gated: justified overage` and collect the required human sign-off.
-
-Merge-flow application of those states:
-
-- `within budget` — standard auto-merge path.
-- `size-gated: justified overage` — **not auto-mergeable**; provide a human
-  sign-off bundle (why the scope is necessary, head SHA, local verification, CI
-  state, bot-review state, unresolved-thread state, residual risk).
-- `size-gated: split recommended` — **hard stop, split into smaller PRs**; do
-  not seek sign-off in lieu of splitting.
-
-The size budget is a review guideline (≤12 changed files / ≤300 changed LOC),
-not worker-enforced config — the `policy.max_changed_*` gate was removed in
-#561. Off-limits paths now live in the repo's `WORKFLOW.md` prompt (SPEC §3.2)
-rather than a `policy.deny_paths` config key; read them there (commonly
-`infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but workflows differ).
-
-## 7. PR body is a living ledger
+## 6. PR body is a living ledger
 
 After every material push, refresh the body: head SHA, acceptance criteria,
 verification commands, mutation check, CI conclusion/run id, dual-reviewer
-verdicts, `@codex review` trigger id + reaction/thread state, size-gate
-classification (one of the three states; rationale if over budget), and
+verdicts, `@codex review` trigger id + reaction/thread state, and
 deferral/follow-up links. A stale body misleads the merge decision.
 
 The final body edit is itself part of the gate: it can start a fresh
@@ -315,19 +286,7 @@ remote checks final. When you inspect CI/metadata logs for warnings, record the
 warning audit alongside the final head SHA rather than relying on an earlier
 run.
 
-Include a size-gate checklist (exactly one box checked):
-
-```markdown
-### Size gate
-- [ ] `within budget` — diff fits the ~12-file / ~300-LOC review guideline
-- [ ] `size-gated: justified overage` — rationale: <why correctness/coverage/
-      safety/perf justifies the extra LOC; not auto-mergeable; needs human
-      size-gate sign-off>
-- [ ] `size-gated: split recommended` — rationale: <which concerns to split
-      into separate PRs; hard stop, do not seek sign-off in lieu of splitting>
-```
-
-## 8. Merge
+## 7. Merge
 
 - **Merge only after explicit human permission.** Squash into the agreed base
   (repo convention) with a commit message describing the **final state**, not a
@@ -343,7 +302,7 @@ Include a size-gate checklist (exactly one box checked):
      non-outdated threads.
   3. Every acceptance criterion met, or each gap deferred to a tracked, linked
      issue.
-  4. Classified `within budget` and touches no off-limits paths.
+  4. Touches no off-limits paths.
   5. Branch protection's required reviews satisfied.
   6. The agreed merge method (default squash) into the agreed base.
 
@@ -360,18 +319,16 @@ Include a size-gate checklist (exactly one box checked):
 
   **Hard stops — always require human sign-off even under an auto-merge grant:**
   force-pushing/merging into `main` out of band or any history rewrite; editing
-  `go.mod`'s `go` directive or touching off-limits paths; a
-  `size-gated: justified overage` PR (flag, don't merge without size-gate
-  sign-off); a `size-gated: split recommended` PR (split, don't seek sign-off);
-  anything the human's instructions put off-limits. When at the edge of the
+  `go.mod`'s `go` directive or touching off-limits paths; anything the human's
+  instructions put off-limits. When at the edge of the
   grant, use `AskUserQuestion`. Stop the moment the human revokes the grant.
 
-## 9. Concurrent sessions on one PR
+## 8. Concurrent sessions on one PR
 
 **Earned by:** PR #768 (2026-06-12). The authoring cloud session and a local
 `handle-pr` session both responded to the same `@codex review` findings;
 three consecutive pushes raced (403 classification, headerless-403 probe,
-size-budget split). Every locally re-derived equivalent was discarded; only
+review-scope split). Every locally re-derived equivalent was discarded; only
 the increments the owner lacked (per-endpoint test pins, `ErrRange`
 saturation, discriminator unit tests, a refutation record) landed. The waste
 was rework; the risk was the `reset --hard` / cherry-pick churn each race

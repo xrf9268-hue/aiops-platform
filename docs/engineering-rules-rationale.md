@@ -268,38 +268,6 @@ shipped.
   them. Mask clone URLs with `workflow.MaskCloneURL`. **Earned by:** #469/PR #483,
   where a doctor ambiguity/not-found error echoed a credentialed `clone_url`
   because `redact()` only scrubbed env-var values.
-- **Worker PR size budget.** ≤12 changed production files / ≤300
-  changed production LOC is a review guideline, not an LOC-reduction mandate. Test
-  files and generated code are excluded from the count, so test coverage never by
-  itself pushes a PR into overage. (These were the `policy.max_changed_files` /
-  `policy.max_changed_loc` worker caps; the worker no longer enforces them — the
-  path/diffstat gate was removed in #561 because it ran post-push and raced
-  reconcile-cancel — so the budget is now a review discipline, not config.) Worker
-  PRs are draft + labeled by default; shape them small when you can, but the
-  budget exists to catch scope creep and force explicit handling — not to
-  incentivize deleting necessary tests, weakening state-machine coverage,
-  skipping race coverage, or preferring compact code over clear reliable code
-  when review feedback exposes a real correctness, safety, performance, or
-  coverage gap. Classify every PR into exactly one of three states and surface it
-  in the PR body:
-  - `within budget` — production diff fits the ~12-file / ~300-LOC guideline (tests and generated code excluded).
-  - `size-gated: justified overage` — over the budget because the extra LOC pays for correctness, regression coverage, race/state-machine safety, or other best-practice hardening that cannot be split without losing atomicity. Requires explicit human size-gate sign-off before merge.
-  - `size-gated: split recommended` — over the budget because of scope creep, unrelated cleanup, or genuinely separable concerns. Stop and split into smaller PRs instead of asking for sign-off.
-
-  Only reduce LOC when the code is genuinely redundant, over-abstracted,
-  duplicated without purpose, or outside scope. Never delete meaningful tests,
-  collapse normal formatting, merge unrelated responsibilities, or otherwise make
-  code less readable solely to satisfy the budget. **Earned by:** PR #455 exceeded
-  the default 300 LOC after multiple valid Codex review findings required
-  additional race/state-machine coverage; the prevailing workflow language nudged
-  the agent toward compressing tests to fit the threshold, which is backwards when
-  the extra lines are paying for correctness. #938 / PR #942 exposed the same
-  incentive on readability: a trace-harness report script was briefly compressed
-  by removing normal blank lines between functions solely to stay under a physical
-  line-count target. Counting production LOC only (tests/generated excluded)
-  removes the test pressure at the source; explicit #943 guidance removes the
-  remaining incentive to game physical line count with readability-hostile
-  compression.
 - **SPEC deviations are gated at author time.** The `PR Metadata`
   workflow (`.github/workflows/pr-metadata.yml` +
   `.github/scripts/validate-pr-metadata.mjs`) blocks a PR that changes a
