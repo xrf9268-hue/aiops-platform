@@ -78,8 +78,7 @@ Running `aiops-platform` outside a target repository while that repository owns
 only its workflow contract, issue readiness rules, and verification commands.
 _Avoid_: Embedded worker, project-local platform
 
-**Small PR auto-merge**:
-Scope-bounded authorization for automation to merge only PRs that remain within
-the review budget and have passed every code, CI, review-thread, and issue
-authorization gate.
+**Authorized auto-merge**:
+Scope-bounded authorization for automation to merge only PRs that have passed
+every code, CI, review-thread, and issue authorization gate.
 _Avoid_: Standing auto-merge, merge on green

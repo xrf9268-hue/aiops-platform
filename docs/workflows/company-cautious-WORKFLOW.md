@@ -56,7 +56,7 @@ policy:
   # protection and required reviewers are the landing boundary.
   mode: draft_pr
   # Path/scope rules (e.g. "do not touch infra/**, deploy/**, secrets/**,
-  # .github/**; keep the diff small") belong in the prompt body below as
+  # .github/**; do not bundle unrelated work") belong in the prompt body below as
   # advisory guidance (SPEC §3.2). Neither sandbox layer exposes a configurable
   # repository-subpath denylist; use repository permissions, branch protection,
   # review, and CI for enforced landing controls. The worker gate was removed in
@@ -111,15 +111,16 @@ Process:
    workspace, and run the agent loop correctly. PR creation, labels, and
    review handoff are the agent's responsibility per SPEC §1, not the
    worker's.
-3. After graduating to `codex-app-server` or `claude`, make the smallest safe edit
-   that respects the off-limits paths stated in the prompt and keeps the diff
-   small (≤12 files / ≤300 LOC review guideline).
+3. After graduating to `codex-app-server` or `claude`, make the smallest
+   coherent edit that resolves the assigned task and respects the off-limits
+   paths stated in the prompt.
 4. Run the verification commands and capture results.
 5. Open the PR as a draft, label it `ai-generated`, `needs-review`, and
    `cautious-mode`, and request review from your-company-reviewer. Summarize what
    you changed, why, and how you verified it in the pull request description.
-6. Stop and explain the blocker if the task is ambiguous, exceeds the requested
-   review budget, or touches a path the prompt marks off-limits.
+6. Stop and explain the blocker if the task is ambiguous, requires unrelated
+   work outside the assigned scope, or touches a path the prompt marks
+   off-limits.
 
 Rules:
 - Never modify infrastructure, deploy manifests, secrets, auth code,
@@ -151,14 +152,14 @@ has produced a clean audit trail:
 2. **Claude with draft PRs** (`claude`).
    When you are ready to let a model author code, switch
    `agent.default` to `claude` while keeping `policy.mode: draft_pr` and a
-   prompt that tells the agent to open draft PRs. State the off-limits paths and
-   a tight review budget in the prompt, and keep the worker sandbox's process,
+   prompt that tells the agent to open draft PRs. State the task boundaries and
+   off-limits paths in the prompt, and keep the worker sandbox's process,
    environment, credential, and network controls conservative.
 
 3. **Codex with draft PRs** (`codex-app-server`).
    Once the Claude loop looks healthy, swap `agent.default` to `codex-app-server`
-   under the same guardrails. Relax the prompt's review budget only after
-   several PRs have been reviewed and merged cleanly.
+   under the same guardrails. Continue reviewing whether completed PRs stay
+   within their assigned task boundaries.
 
 Do not switch off `mock` if any of the following is still true:
 

@@ -12,7 +12,7 @@ metadata:
 
 本仓库是 OpenAI Symphony SPEC 的 Go 端口，SPEC 对齐是硬要求。本 skill 覆盖 **issue → 开 PR** 阶段；PR 之后交给 `handle-pr`（SPEC 对齐审查轮）+ `gh-pr-follow-through`（盯到 merge-ready）。
 
-> **审查 / 合并协议是共享的。** pre-push 双 reviewer、`@codex review` 收敛、GraphQL review threads、size-gate 三态、合并门槛、回归+变异测试纪律统一在
+> **审查 / 合并协议是共享的。** pre-push 双 reviewer、`@codex review` 收敛、GraphQL review threads、PR-body 活账本、合并门槛、回归+变异测试纪律统一在
 > [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md)。本 skill 只写 **issue→PR 阶段差异**，到 push/审查/合并步骤直接照那份协议执行，不在此复述。
 
 ## 何时用 / 不该用
@@ -29,10 +29,10 @@ metadata:
 
 ## 流程（按序）
 
-### 1. 读 issue + 并行 owner 探测（协议 §9 issue-phase 推论）
+### 1. 读 issue + 并行 owner 探测（协议 §8 issue-phase 推论）
 读 labels（`area:spec-alignment` / `priority:pN` / `type:*`）与正文。**把正文的 Acceptance criteria 复选框当作 definition-of-done**——每条都要满足或显式说明为何不在范围内。
 
-动手前先执行协议 §9 的 **issue-phase 探测**，判定命令与处置路由全部以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md#9-concurrent-sessions-on-one-pr) §9 为唯一来源，照其结果执行。**模式自主选定并通报，不询问。**
+动手前先执行协议 §8 的 **issue-phase 探测**，判定命令与处置路由全部以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md#8-concurrent-sessions-on-one-pr) §8 为唯一来源，照其结果执行。**模式自主选定并通报，不询问。**
 
 ### 1.5 负面约束 preflight（设计 / 边界类 issue 必须）
 如果 issue 引用了 design doc、runbook、SPEC boundary、redaction/retention rule、non-goal list，或正文里出现 "do not store / parse / mutate / persist / automate / gate" 这类负面约束，**写代码前先写短 guardrail**。至少列出：
@@ -54,7 +54,7 @@ metadata:
 - **DEVIATIONS.md 决策门**：研究到结论再提（AGENTS.md 原则 7）——别把「关闭既有 / 新开 / 回退」当多选题甩给用户，SPEC + Elixir 参考通常已能定论（最常见结论：upstream 缺失且 SPEC 归在别处的扩展应删除）。别为了让差异消失而新造「deliberate extension」。
 
 ### 3. 分支 + 实现
-- 分支基底按步骤 1 的 §9 探测结果定；仅当探测结论为"自由开工"时才从 `main` 开 `fix/<n>-<slug>`（如 `fix/331-active-transition-workspace-cleanup`）。
+- 分支基底按步骤 1 的 §8 探测结果定；仅当探测结论为"自由开工"时才从 `main` 开 `fix/<n>-<slug>`（如 `fix/331-active-transition-workspace-cleanup`）。
 - **显式补上 Elixir 隐式的 BEAM 保证**（checklist item 2）：followup goroutine 包 `context.WithTimeout`；每个 `go func`/`time.AfterFunc` 上 `defer recoverPanic` 或走 `safeGo`；重置 timer 前先 `Timer.Stop()`。
 - 算法对齐 upstream 分支（如终态清理仅在 terminal 转换、引用 `orchestrator.ex` 行号）。
 - 测试纪律（回归 + 变异 + fire-and-forget 的确定性 barrier + `-race`）见协议 §1；**别把"本地变绿"当成验证了发布物**。
@@ -71,14 +71,14 @@ go build ./cmd/worker ./cmd/tui
 
 ### 5. 提交 → 双审 → 开 PR
 1. 按协议 §2–§3 commit-first + pre-push 双 reviewer；先执行协议里的 **subagent-first reviewer routing**，具体 reviewer-routing 细节以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md) 为唯一来源。主交互会话里的 reviewer subagent 路径在工具契约允许默认派生时**默认开启、不问授权**（#900）；运行时契约挡住时按协议记录 fallback，操作者可在当前请求写 `CLI review only` 等短语 opt-out。review finding 先按当前 head、issue 计划、SPEC/Elixir 参考和相邻路径验证技术正确性，再修复 / 反证 / 延后。§4 每 push 跑 `@codex review` 收敛，§5 处理 review threads。
-2. push 后开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`），列验收项、验证命令、变异验证、风险/deferral；PR body 是活账本（协议 §7）。
+2. push 后开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`），列验收项、验证命令、变异验证、风险/deferral；PR body 是活账本（协议 §6）。
 3. **每条 finding 归入 ≥1 类**：算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试；然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；挂到 `DEVIATIONS.md` 指向的当前 alignment ledger，不要默认使用历史 D1–D24 的 #67）。
 4. **Deferred 偏差必须开 issue**（AGENTS.md rule 2）：决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
 5. **Scope 分离**：治理/文档类改动从 main 开新分支**单独 PR**，不要塞进 fix PR。
 6. 收敛后交给 `gh-pr-follow-through`（私有 `xrf9268-hue/yy-skills`；云端容器通常没装）盯 CI + 线程到 merge-ready。**该 skill 不可用时就地内联**：`gh pr checks <pr> --watch --fail-fast` 等 CI → GraphQL `reviewThreads` 解决所有未决 actionable thread → 最后一次 PR body 更新后等新的 `PR Metadata` 终态并做 warning audit → merge-ready。期间推了修复就对新 head 重跑协议 §3–§5。
 
 ### 6. 合并
-按协议 §8：**必须等用户明确许可**；squash + 删分支，commit message 写最终状态；`--force-with-lease=<branch>:<known-sha>`。批次/scope 显式授权下的 opt-in 自动合并见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)。
+按协议 §7：**必须等用户明确许可**；squash + 删分支，commit message 写最终状态；`--force-with-lease=<branch>:<known-sha>`。批次/scope 显式授权下的 opt-in 自动合并见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)。
 
 ## 反模式备忘（踩过的坑）
 - **pre-release 别加 back-compat**：别名 / 双发同一数据 / 保留旧 wire 名都是技术债，要单独清理 PR（#338 双发 `last_codex_at`+`last_event_at` → 清理 #342）。SPEC 重命名就全量原子改名，内部 Go 标识符也对齐 SPEC 词汇，注释只解释 why（AGENTS.md「These rules apply to every PR」§1–§5）。仓库内消费者用旧名就在同一 PR 改掉。
@@ -99,10 +99,10 @@ go build ./cmd/worker ./cmd/tui
 - 每个已 push 的 head 过了 pre-push 双 reviewer + fresh `@codex review` 收敛 + GraphQL threads 无未决 actionable thread（协议 §3–§5）。
 - CI 全绿：`gh pr checks <pr> --watch --fail-fast` 阻塞到完成。
 - issue 的每条 Acceptance criteria 满足或显式延后到 tracked issue。
-- 用户明确许可后才合并（协议 §8）。
+- 用户明确许可后才合并（协议 §7）。
 
 ## 默认行为
-- **自主优先**：协议 §8 hard stops（以协议原文清单为唯一来源，不在此枚举）之外的决策——SPEC/upstream 裁定、finding 修复/反证/延后、分支与增量取舍、body/thread 维护——自主做并简要通报，不向用户提问；证据已能定论的不做多选题（AGENTS.md 原则 7）。
+- **自主优先**：协议 §7 hard stops（以协议原文清单为唯一来源，不在此枚举）之外的决策——SPEC/upstream 裁定、finding 修复/反证/延后、分支与增量取舍、body/thread 维护——自主做并简要通报，不向用户提问；证据已能定论的不做多选题（AGENTS.md 原则 7）。
 - 中文回复，简洁；每次只汇报变化，不复述。
 - Claude Code 若同一工具动作连续 2 次 malformed / stall / 中断，停止第 3 次原地重试，升级给 `codex:codex-rescue`，附当前 head、目标动作、失败 transcript、已验证事实；这是运行时故障，不是技术 finding 通过或失败。
 - worker 永不 push/合并 PR 或写 tracker 状态（D8/#76）。

@@ -83,9 +83,9 @@ Hard requirements:
 - Work only on the assigned issue. Do not opportunistically refactor unrelated areas.
 - Read AGENTS.md, README.md, the issue text, and the relevant SPEC/reference paths before design-sensitive changes.
 - Use a focused failing test before production code changes when adding behavior or fixing bugs.
-- Keep changes within the repository's documented review budget and prompt
-  scope unless the issue explicitly requires a larger change; these are review
-  expectations, not worker-enforced path or diffstat limits.
+- Keep changes within the assigned issue and prompt scope; do not bundle
+  unrelated work into the same PR. These are review expectations, not
+  worker-enforced path or diffstat limits.
 - Before opening or updating a PR, check for an existing open PR that closes the
   assigned issue (`gh pr list --state open --search "#<issue-number>"` plus a
   direct PR-body/linked-issue check). If one exists, update and reuse that PR

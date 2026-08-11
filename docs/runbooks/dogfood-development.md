@@ -49,9 +49,9 @@ Use the project skills directly:
 - `.claude/skills/handle-pr/SKILL.md` plus the PR protocol for an existing PR.
 
 This stage is the fallback whenever scheduler-managed automation is not the
-right fit: requirements are unclear, dependencies are unresolved, a change is
-too large, a sensitive path is involved, or you want a direct Claude Code/Codex
-session instead of worker dispatch.
+right fit: requirements are unclear, dependencies are unresolved, the task
+cannot be bounded to one coherent issue, a sensitive path is involved, or you
+want a direct Claude Code/Codex session instead of worker dispatch.
 
 Reviewer tooling still follows the PR protocol in direct sessions. Use the
 protocol's subagent-first reviewer routing and keep concrete reviewer mechanics
@@ -102,7 +102,7 @@ not review or merge PRs.
 
 For each candidate issue:
 
-1. Confirm the issue is small, has acceptance criteria, and names off-limits
+1. Confirm the issue is coherent, has acceptance criteria, and names off-limits
    paths.
 2. Classify dependencies as `hard dependency`, `soft overlap`, or
    `independent issue`.
@@ -151,12 +151,11 @@ batch runbook:
 issue -> depends_on -> dependency_type -> ready_gate -> branch/worktree -> PR -> head -> state -> next action
 ```
 
-## Small PR auto-merge
+## Authorized auto-merge
 
 Auto-merge is never a standing grant. It must be authorized for a named scope.
-Even then, it applies only to small PRs:
+Even then, it applies only when every landing gate is satisfied:
 
-- within the review budget
 - no off-limits paths
 - configured verification green
 - independent local reviews clean
@@ -172,7 +171,6 @@ If any condition is missing, leave the PR for human merge.
 Stop unattended dogfood and switch to manual work when:
 
 - a downstream issue needs an unmerged blocker
-- the PR exceeds the small-change review budget
 - the agent touches sensitive paths or ignores scope
 - reviewer output is malformed, non-JSON, timed out, or blocking
 - CI or review threads require design judgment
