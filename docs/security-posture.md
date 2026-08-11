@@ -317,7 +317,8 @@ independently validated container or VM boundary supersedes it:
 - `agent.default: mock` for initial validation;
 - `policy.mode: draft_pr`;
 - a WORKFLOW prompt that tells the agent to open draft PRs (SPEC §1, #76);
-- conservative changed-file and changed-LOC review guidance in the prompt;
+- explicit task boundaries and instructions not to bundle unrelated work in the
+  prompt;
 - explicit off-limits paths in the prompt, backed by repository permissions,
   branch protection, required review, and CI checks for actual enforcement;
 - low-privilege bot credentials;

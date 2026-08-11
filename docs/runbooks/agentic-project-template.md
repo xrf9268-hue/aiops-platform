@@ -95,7 +95,6 @@ Each agent-created PR should include:
 - Acceptance criteria checklist.
 - Verification commands and results.
 - Dependency or deferral notes.
-- Review-size classification.
 - Current head SHA when a follow-through automation uses it as a gate.
 
 ## Worker setup order

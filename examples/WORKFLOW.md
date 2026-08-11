@@ -130,6 +130,6 @@ Process:
 Rules:
 - Do not touch secrets, credentials, production deployment files, or database migrations.
 - Do not do broad refactors unless explicitly requested.
-- Prefer small reviewable changes.
+- Prefer coherent, issue-scoped changes.
 - Draft PRs require human review.
 - The orchestrator will not push, open PRs, or write tracker state for you; those are agent responsibilities per SPEC §1.

@@ -31,7 +31,11 @@ Backlog -> Todo -> In Progress -> Human Review -> Rework -> Done
 Per-state rules:
 
 - `Backlog`: not picked up. Use this for anything you have not refined yet.
-- `Todo`: refined and small enough that an agent can attempt it. The worker poll tick picks these up. Name this state exactly `Todo`: the SPEC §8.2 blocker rule only gates issues whose state is literally `Todo`, so a renamed ready state silently disables dependency blocking (#739).
+- `Todo`: refined into one coherent task with enough acceptance detail for an
+  agent to attempt it. The worker poll tick picks these up. Name this state
+  exactly `Todo`: the SPEC §8.2 blocker rule only gates issues whose state is
+  literally `Todo`, so a renamed ready state silently disables dependency
+  blocking (#739).
 - `In Progress`: the agent has claimed an issue or you are iterating on it. Stays in `active_states` so re-runs after a push are allowed.
 - `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself. Per SPEC §1, tracker updates belong on the agent/tool side, not in the worker scheduler.
 - `Rework`: review found issues and you want another attempt. Keep `Rework` in `active_states` so the worker can pick the issue up again after the tracker state changes. The in-memory orchestrator state, not Postgres queue rows, is the scheduling authority for the running worker process.
@@ -198,8 +202,8 @@ prefer Claude / want a second opinion -> claude
 range of code changes — it drives a long-running Codex session of up to
 `agent.max_turns` (default 20) back-to-back turns on one thread (SPEC §7.1),
 also bounded by the remaining D34 clean-turn budget for fresh/continuation
-dispatches. Pick `claude` when you want a different agent, not because the
-change is larger.
+dispatches. Pick `claude` when you want a different agent; task scope does not
+determine runner choice.
 
 ## Handling failed tasks
 
@@ -224,7 +228,9 @@ post-mortem or `.aiops/CHANGED_FILES.txt` snapshot (#575).
 
 - `repo.clone_url missing in WORKFLOW.md`: worker log line. Fix `WORKFLOW.md`, restart the worker.
 - Verification command failed (`go test ./...` non-zero): read the `runner_end` event's `error` payload (and process logs) for the failure reason. Reproduce locally on the same branch.
-- Change landed out of scope or oversized (touched an off-limits path, or the diff is too big for review): re-scope the task into a smaller issue, sharpen the prompt's scope guidance, or do it manually.
+- Change landed out of scope or mixed independent concerns (touched an
+  off-limits path or bundled unrelated work): re-scope the task into a coherent
+  issue, sharpen the prompt's scope guidance, or do it manually.
 - Runner command not found: confirm `codex.command` (the `codex app-server` launch command) or `claude.command` resolves in the worker's scoped `PATH`. The `claude` shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
 - Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label).
 
@@ -242,6 +248,8 @@ Mark the issue back to `Backlog` or `Human Review` and finish it by hand if any 
 
 - two runner attempts produced wrong or empty diffs.
 - the failure mode is unclear after reading worker logs and workspace artifacts.
-- the work has crossed into a sensitive (infra/deploy/migrations/secrets) area or grown well past the size guideline.
+- the work has crossed into a sensitive (infra/deploy/migrations/secrets) area
+  or requires unrelated work outside the assigned issue.
 
-The platform is meant to save time on small, well-scoped tasks. When it stops doing that for a given issue, do not fight it.
+The platform is meant to save time on well-scoped tasks. When it stops doing
+that for a given issue, do not fight it.

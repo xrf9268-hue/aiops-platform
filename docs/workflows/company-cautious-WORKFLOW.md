@@ -56,7 +56,7 @@ policy:
   # protection and required reviewers are the landing boundary.
   mode: draft_pr
   # Path/scope rules (e.g. "do not touch infra/**, deploy/**, secrets/**,
-  # .github/**; keep the diff small") belong in the prompt body below as
+  # .github/**; do not bundle unrelated work") belong in the prompt body below as
   # advisory guidance (SPEC §3.2). Neither sandbox layer exposes a configurable
   # repository-subpath denylist; use repository permissions, branch protection,
   # review, and CI for enforced landing controls. The worker gate was removed in

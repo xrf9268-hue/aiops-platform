@@ -37,7 +37,7 @@ generalize beyond what those runs actually taught.
 ## The unit of work: one issue → one PR
 
 1. **One issue per branch, one branch per PR.** Never bundle multiple issues
-   into a single PR. Small blast radius is what makes a batch reviewable: CI
+   into a single PR. Issue isolation is what makes a batch reviewable: CI
    failures localize to one issue, the human can merge at their own cadence,
    and a revert touches exactly one concern. **Earned by:** the eight-issue
    batch shipped as eight independent PRs and every one was reviewable in

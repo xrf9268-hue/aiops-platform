@@ -49,9 +49,9 @@ Use the project skills directly:
 - `.claude/skills/handle-pr/SKILL.md` plus the PR protocol for an existing PR.
 
 This stage is the fallback whenever scheduler-managed automation is not the
-right fit: requirements are unclear, dependencies are unresolved, a change is
-too large, a sensitive path is involved, or you want a direct Claude Code/Codex
-session instead of worker dispatch.
+right fit: requirements are unclear, dependencies are unresolved, the task
+cannot be bounded to one coherent issue, a sensitive path is involved, or you
+want a direct Claude Code/Codex session instead of worker dispatch.
 
 Reviewer tooling still follows the PR protocol in direct sessions. Use the
 protocol's subagent-first reviewer routing and keep concrete reviewer mechanics
@@ -102,7 +102,7 @@ not review or merge PRs.
 
 For each candidate issue:
 
-1. Confirm the issue is small, has acceptance criteria, and names off-limits
+1. Confirm the issue is coherent, has acceptance criteria, and names off-limits
    paths.
 2. Classify dependencies as `hard dependency`, `soft overlap`, or
    `independent issue`.
