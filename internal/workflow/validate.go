@@ -144,6 +144,12 @@ func validateServerPort(path string, cfg Config) error {
 // Claude-side options that only Codex supports, and checks the linear_graphql
 // allowed-mutations opt-in.
 func validateCodexClaude(path string, cfg Config) error {
+	if strings.TrimSpace(cfg.Codex.Command) == "" {
+		return fmt.Errorf("%s: codex.command must not be blank", path)
+	}
+	if strings.TrimSpace(cfg.Claude.Command) == "" {
+		return fmt.Errorf("%s: claude.command must not be blank", path)
+	}
 	if err := cfg.Codex.TurnSandboxPolicy.Validate("codex.turn_sandbox_policy"); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}

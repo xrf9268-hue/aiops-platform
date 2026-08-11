@@ -32,6 +32,45 @@ Prompt body
 	}
 }
 
+func TestLoadRejectsExplicitWhitespaceRunnerCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		section string
+	}{
+		{name: "codex", section: "codex"},
+		{name: "claude", section: "claude"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempWorkflow(t, `---
+repo:
+  owner: acme
+  name: widgets
+  clone_url: https://github.com/acme/widgets.git
+tracker:
+  kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/widgets
+`+tt.section+`:
+  command: "   "
+---
+Prompt body
+`)
+
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load(%s.command=whitespace) error = nil; want validation error", tt.section)
+			}
+			for _, want := range []string{path, tt.section + ".command", "must not be blank"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("Load(%s.command=whitespace) error = %q; want substring %q", tt.section, err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadRejectsNonPositiveHooksTimeoutMs(t *testing.T) {
 	tests := []struct {
 		name string

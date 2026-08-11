@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2618,6 +2619,60 @@ func TestValidateWorkflowForRuntimeRejectsFrontMatterWorkflowMissingTaskFields(t
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("validateWorkflowForRuntime error = %v, want substring %q", err, want)
 		}
+	}
+}
+
+func TestRunRejectsSemanticInvalidColdStartBeforeTrackerSideEffects(t *testing.T) {
+	tests := []struct {
+		name          string
+		token         string
+		codexCommand  string
+		claudeCommand string
+		wantError     string
+	}{
+		{name: "missing selected-provider secret", token: "$AIOPS_TEST_ISSUE_1145_MISSING_TOKEN", codexCommand: "codex app-server", claudeCommand: "claude", wantError: "missing_tracker_secret"},
+		{name: "whitespace codex command", token: "valid-token", codexCommand: "   ", claudeCommand: "claude", wantError: "codex.command"},
+		{name: "whitespace claude command", token: "valid-token", codexCommand: "codex app-server", claudeCommand: "   ", wantError: "claude.command"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AIOPS_TEST_ISSUE_1145_MISSING_TOKEN", "")
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				http.Error(w, "unexpected tracker request", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "side-effect-marker")
+			workflowPath := filepath.Join(dir, "WORKFLOW.md")
+			body := "---\n" +
+				"repo:\n  owner: acme\n  name: widgets\n  clone_url: https://github.com/acme/widgets.git\n" +
+				"server:\n  port: -1\n" +
+				"tracker:\n  kind: gitea\n  provider:\n    base_url: " + server.URL + "\n    repo: acme/widgets\n    token: \"" + tt.token + "\"\n" +
+				"hooks:\n  after_create: \"touch " + marker + "\"\n  before_run: \"touch " + marker + "\"\n" +
+				"agent:\n  default: mock\n" +
+				"codex:\n  command: \"" + tt.codexCommand + "\"\n" +
+				"claude:\n  command: \"" + tt.claudeCommand + "\"\n" +
+				"---\nCold-start admission test\n"
+			if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
+				t.Fatalf("write workflow: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			err := run(ctx, []string{workflowPath})
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("run(invalid cold start) error = %v; want substring %q", err, tt.wantError)
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("tracker request count before semantic admission failure = %d; want 0", got)
+			}
+			if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("hook/runner side-effect marker stat error = %v; want not-exist", statErr)
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -680,6 +681,117 @@ func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *
 	}
 	if got := emitter.count(task.EventWorkflowReloadFailed); got != 1 {
 		t.Fatalf("workflow_reload_failed event count = %d, want 1", got)
+	}
+}
+
+func TestWorkflowRuntimeSemanticAdmissionKeepsCompleteLastGoodSnapshot(t *testing.T) {
+	tests := []struct {
+		name        string
+		invalidYAML func(string) string
+		wantError   string
+	}{
+		{
+			name: "missing selected-provider secret",
+			invalidYAML: func(endpoint string) string {
+				return semanticAdmissionWorkflow(endpoint, "$AIOPS_TEST_ISSUE_1145_MISSING_TOKEN", "codex app-server", "claude", 41000, "Invalid provider prompt")
+			},
+			wantError: "missing_tracker_secret",
+		},
+		{
+			name: "whitespace codex command",
+			invalidYAML: func(endpoint string) string {
+				return semanticAdmissionWorkflow(endpoint, "valid-token", "   ", "claude", 42000, "Invalid Codex prompt")
+			},
+			wantError: "codex.command",
+		},
+		{
+			name: "whitespace claude command",
+			invalidYAML: func(endpoint string) string {
+				return semanticAdmissionWorkflow(endpoint, "valid-token", "codex app-server", "   ", 43000, "Invalid Claude prompt")
+			},
+			wantError: "claude.command",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AIOPS_TEST_ISSUE_1145_MISSING_TOKEN", "")
+			path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+			writeSemanticAdmissionWorkflow(t, path, semanticAdmissionWorkflow("https://gitea.initial.test", "initial-token", "codex app-server --initial", "claude --initial", 30000, "Initial prompt"))
+			initial, err := workflow.Load(path)
+			if err != nil {
+				t.Fatalf("load initial workflow: %v", err)
+			}
+			emitter := &recordingWorkflowReloadEmitter{}
+			runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile, Emitter: emitter})
+			if err != nil {
+				t.Fatalf("new runtime: %v", err)
+			}
+			lastGood := runtime.Current()
+			lastBinding := lastGood.Workflow.Config.Tracker.ProviderProfile()
+
+			writeSemanticAdmissionWorkflow(t, path, tt.invalidYAML("https://gitea.invalid.test"))
+			err = runtime.ReloadOnce(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("ReloadOnce(invalid snapshot) error = %v; want substring %q", err, tt.wantError)
+			}
+			got := runtime.Current()
+			if !reflect.DeepEqual(got, lastGood) {
+				t.Fatalf("snapshot after rejected reload = %#v; want exact last-good %#v", got, lastGood)
+			}
+			if got.Workflow.Config.Tracker.ProviderProfile() != lastBinding {
+				t.Fatal("tracker binding changed after rejected reload")
+			}
+			if got.Fingerprint != lastGood.Fingerprint {
+				t.Fatalf("fingerprint after rejected reload = %q; want last-good %q", got.Fingerprint, lastGood.Fingerprint)
+			}
+			if emitter.count(task.EventWorkflowReloadFailed) != 1 || emitter.count(task.EventWorkflowReloaded) != 0 {
+				t.Fatalf("reload events after rejection: failed=%d reloaded=%d; want 1/0", emitter.count(task.EventWorkflowReloadFailed), emitter.count(task.EventWorkflowReloaded))
+			}
+
+			writeSemanticAdmissionWorkflow(t, path, semanticAdmissionWorkflow("https://gitea.recovered.test", "recovered-token", "codex app-server --recovered", "claude --recovered", 51000, "Recovered prompt"))
+			if err := runtime.ReloadOnce(context.Background()); err != nil {
+				t.Fatalf("ReloadOnce(recovered snapshot): %v", err)
+			}
+			recovered := runtime.Current()
+			if recovered.Fingerprint == lastGood.Fingerprint {
+				t.Fatalf("recovered fingerprint = last-good %q; want newly admitted fingerprint", recovered.Fingerprint)
+			}
+			if recovered.Workflow.PromptTemplate != "Recovered prompt" || recovered.Workflow.Config.Polling.IntervalMs != 51000 {
+				t.Fatalf("recovered snapshot prompt/interval = %q/%d; want Recovered prompt/51000", recovered.Workflow.PromptTemplate, recovered.Workflow.Config.Polling.IntervalMs)
+			}
+			if recovered.Workflow.Config.Codex.Command != "codex app-server --recovered" || recovered.Workflow.Config.Claude.Command != "claude --recovered" {
+				t.Fatalf("recovered runner settings = codex %q, claude %q", recovered.Workflow.Config.Codex.Command, recovered.Workflow.Config.Claude.Command)
+			}
+			if recovered.Workflow.Config.Tracker.ProviderProfile() == lastBinding {
+				t.Fatal("recovered tracker binding still points at last-good profile")
+			}
+			if got := recovered.Workflow.Config.Tracker.Provider["base_url"]; got != "https://gitea.recovered.test" {
+				t.Fatalf("recovered tracker.provider.base_url = %#v; want recovered endpoint", got)
+			}
+			if emitter.count(task.EventWorkflowReloaded) != 1 {
+				t.Fatalf("reload-success event count after recovery = %d; want 1", emitter.count(task.EventWorkflowReloaded))
+			}
+		})
+	}
+}
+
+func semanticAdmissionWorkflow(endpoint, token, codexCommand, claudeCommand string, pollInterval int, prompt string) string {
+	return "---\n" +
+		"repo:\n  owner: acme\n  name: widgets\n  clone_url: https://github.com/acme/widgets.git\n" +
+		"server:\n  port: -1\n" +
+		"tracker:\n  kind: gitea\n  provider:\n    base_url: " + endpoint + "\n    repo: acme/widgets\n    token: \"" + token + "\"\n" +
+		"  active_states: [Todo]\n  terminal_states: [Done]\n" +
+		"polling:\n  interval_ms: " + strconv.Itoa(pollInterval) + "\n" +
+		"agent:\n  default: mock\n" +
+		"codex:\n  command: \"" + codexCommand + "\"\n" +
+		"claude:\n  command: \"" + claudeCommand + "\"\n" +
+		"---\n" + prompt + "\n"
+}
+
+func writeSemanticAdmissionWorkflow(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write semantic-admission workflow: %v", err)
 	}
 }
 

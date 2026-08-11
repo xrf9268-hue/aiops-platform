@@ -150,7 +150,7 @@ over stdio).
 
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
-| `codex.command` | string | `codex app-server` | Launch command for the app-server subprocess; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell-environment inheritance | `$VAR`; a `codex exec` argv is rejected (#541) |
+| `codex.command` | string | `codex app-server` | Launch command for the app-server subprocess; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell-environment inheritance | `$VAR`; explicit blank/whitespace rejected; a `codex exec` argv is rejected (#541) |
 | `codex.env_passthrough` | string list | `[]` | Env vars the Codex app-server subprocess inherits beyond its baseline (`PATH`, `HOME`, `CODEX_HOME`, `TMPDIR`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Adapter-declared tracker secret names, exact referenced names, and same-value aliases are denied | denied names rejected at load |
 | `codex.approval_policy` | map | `granular` with every flag `false` (auto-reject all approval prompts) | Sent as the app-server approval policy | — |
 | `codex.thread_sandbox` | string | `workspace-write` | `thread/start` sandbox string; also the single knob the per-turn policy derives from (DEVIATIONS D32) | — |
@@ -189,7 +189,7 @@ does not accept an operator-defined repository-subpath denylist.
 
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
-| `claude.command` | string | `claude` | Launch command for the Claude runner | `$VAR` |
+| `claude.command` | string | `claude` | Launch command for the Claude runner | `$VAR`; explicit blank/whitespace rejected |
 | `claude.env_passthrough` | string list | `[]` | Same deny-list as `codex.env_passthrough`, but the default Claude/generic baseline excludes `CODEX_HOME`; opt in explicitly only when that runner intentionally needs it | denied names rejected at load |
 
 `claude:` shares the `codex:` schema shape, but the app-server fields

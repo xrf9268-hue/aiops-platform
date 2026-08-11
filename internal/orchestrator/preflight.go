@@ -12,8 +12,8 @@ import (
 // validateDispatchPreflight is the SPEC §8.1 step 2 / §6.3 per-tick check for
 // core scheduler invariants. The workflow loader and reloader admit the
 // selected adapter's effective profile before publishing a config snapshot;
-// #1144 deliberately does not repeat adapter semantics inside the
-// orchestrator. Last-good semantic reload admission remains tracked by #1145.
+// adapter-specific semantics deliberately stay out of the orchestrator. This
+// check remains defense in depth for manually constructed runtime configs.
 //
 // Returned error joins every individual failure so the operator-visible
 // event message carries the full reason set, not just the first one.
