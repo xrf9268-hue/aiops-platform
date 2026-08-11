@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.18](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.17...v0.1.18) (2026-08-11)
+
+
+### Bug Fixes
+
+* **orchestrator:** normalize candidate priority bucket ([5fc3a86](https://github.com/xrf9268-hue/aiops-platform/commit/5fc3a867b032258b0087fd02fcac57611529f6ef))
+* **orchestrator:** rank only priorities 1 through 4 ahead of unknown ([#1162](https://github.com/xrf9268-hue/aiops-platform/issues/1162)) ([5fc3a86](https://github.com/xrf9268-hue/aiops-platform/commit/5fc3a867b032258b0087fd02fcac57611529f6ef))
+* **runner:** block generic tool input ([f4f8c29](https://github.com/xrf9268-hue/aiops-platform/commit/f4f8c299e0f64b8b3032309bf8634183fcbdee26))
+* **runner:** block generic tool input without fabricated answers ([#1161](https://github.com/xrf9268-hue/aiops-platform/issues/1161)) ([f4f8c29](https://github.com/xrf9268-hue/aiops-platform/commit/f4f8c299e0f64b8b3032309bf8634183fcbdee26))
+* **runner:** treat turn timeout as stream silence ([#1141](https://github.com/xrf9268-hue/aiops-platform/issues/1141)) ([fb94c32](https://github.com/xrf9268-hue/aiops-platform/commit/fb94c3268b5645b5d4aeb7f3a913ceeb7f3235ea))
+* **runner:** treat turn timeout as stream silence ([#1160](https://github.com/xrf9268-hue/aiops-platform/issues/1160)) ([fb94c32](https://github.com/xrf9268-hue/aiops-platform/commit/fb94c3268b5645b5d4aeb7f3a913ceeb7f3235ea))
+* **worker:** validate workspace paths before cleanup hooks ([#1156](https://github.com/xrf9268-hue/aiops-platform/issues/1156)) ([434565e](https://github.com/xrf9268-hue/aiops-platform/commit/434565e6c5ea663f05cf080670acc3320c64d825))
+* **workspace:** add collision-resistant issue keys ([#1158](https://github.com/xrf9268-hue/aiops-platform/issues/1158)) ([b4d06dc](https://github.com/xrf9268-hue/aiops-platform/commit/b4d06dcb0ad0610c13105287e9908ea3519f08bb))
+
 ## [0.1.17](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.16...v0.1.17) (2026-07-24)
 
 
