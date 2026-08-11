@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -608,8 +607,4 @@ func containsIssueLabelFold(labels []giteaIssueLabel, label string) bool {
 		}
 	}
 	return false
-}
-
-func giteaBaseURLFromTracker(cfg workflow.TrackerConfig) string {
-	return gitea.BaseURLFromTrackerConfig(cfg, os.Getenv("GITEA_BASE_URL"))
 }

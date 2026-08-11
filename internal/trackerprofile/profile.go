@@ -170,13 +170,22 @@ func explicitEnvReference(value string) (string, bool) {
 }
 
 func validEnvironmentName(name string) bool {
+	if name == "" {
+		return false
+	}
 	for i, r := range name {
-		letter := r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
-		if (i == 0 && !letter) || (i > 0 && !letter && (r < '0' || r > '9')) {
+		if !validEnvironmentCharacter(r, i == 0) {
 			return false
 		}
 	}
-	return name != ""
+	return true
+}
+
+func validEnvironmentCharacter(r rune, first bool) bool {
+	if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' {
+		return true
+	}
+	return !first && r >= '0' && r <= '9'
 }
 
 // EnvironmentValue returns a non-empty environment value or fallback.

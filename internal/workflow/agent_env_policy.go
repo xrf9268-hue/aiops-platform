@@ -31,8 +31,21 @@ func AgentEnvPassthroughDenyReasonForConfigWithLookup(name string, cfg Config, l
 	if reason := AgentEnvPassthroughDenyReason(name); reason != "" {
 		return reason
 	}
+	secretNames, secretValues := trackerSecretsForConfig(cfg, lookup)
+	for _, secretName := range secretNames {
+		if strings.EqualFold(name, secretName) {
+			return "tracker provider secret must stay behind orchestrator tools"
+		}
+	}
+	if value, ok := lookup(name); ok && value != "" && containsValue(secretValues, value) {
+		return "tracker provider secret value must stay behind orchestrator tools"
+	}
+	return ""
+}
+
+func trackerSecretsForConfig(cfg Config, lookup func(string) (string, bool)) ([]string, []string) {
 	profile := cfg.Tracker.ProviderProfile()
-	var secretNames, secretValues []string
+	var secretNames []string
 	if profile != nil {
 		secretNames = append(secretNames, profile.SecretEnvironmentNames()...)
 	}
@@ -44,19 +57,16 @@ func AgentEnvPassthroughDenyReasonForConfigWithLookup(name string, cfg Config, l
 	}
 	if profile != nil {
 		secretNames = append(secretNames, profile.SecretEnvironmentNames()...)
-		secretValues = profile.SecretValues()
+		return secretNames, profile.SecretValues()
 	}
-	for _, secretName := range secretNames {
-		if strings.EqualFold(name, secretName) {
-			return "tracker provider secret must stay behind orchestrator tools"
+	return secretNames, nil
+}
+
+func containsValue(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
 		}
 	}
-	if value, ok := lookup(name); ok && value != "" {
-		for _, secret := range secretValues {
-			if value == secret {
-				return "tracker provider secret value must stay behind orchestrator tools"
-			}
-		}
-	}
-	return ""
+	return false
 }
