@@ -75,6 +75,42 @@ Prompt body
 	}
 }
 
+func TestLoadKeepsDefaultRunnerCommandsWhenCommandsAreOmitted(t *testing.T) {
+	tests := []struct {
+		name  string
+		extra string
+	}{
+		{name: "both sections omitted"},
+		{name: "codex non-command settings only", extra: "codex:\n  env_passthrough: [CI]\n"},
+		{name: "claude non-command settings only", extra: "claude:\n  env_passthrough: [CI]\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempWorkflow(t, `---
+repo:
+  owner: acme
+  name: widgets
+  clone_url: https://github.com/acme/widgets.git
+tracker:
+  kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/widgets
+`+tt.extra+`---
+Prompt body
+`)
+
+			wf, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load(commands omitted): %v", err)
+			}
+			if wf.Config.Codex.Command != DefaultCodexCommand || wf.Config.Claude.Command != "claude" {
+				t.Fatalf("default runner commands = codex %q, claude %q; want %q/%q", wf.Config.Codex.Command, wf.Config.Claude.Command, DefaultCodexCommand, "claude")
+			}
+		})
+	}
+}
+
 func TestLoadRejectsNonPositiveHooksTimeoutMs(t *testing.T) {
 	tests := []struct {
 		name string

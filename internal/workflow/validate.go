@@ -127,6 +127,9 @@ func validateServerPort(path string, cfg Config) error {
 // Claude-side options that only Codex supports, and checks the linear_graphql
 // allowed-mutations opt-in.
 func validateCodexClaude(path string, cfg Config) error {
+	// Validate both runner sections as one typed snapshot even when one is not
+	// currently selected: a later reload may switch agent.default, and an
+	// explicitly invalid fallback must not enter the last-good configuration.
 	if strings.TrimSpace(cfg.Codex.Command) == "" {
 		return fmt.Errorf("%s: codex.command must not be blank", path)
 	}
