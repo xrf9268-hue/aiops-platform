@@ -86,6 +86,7 @@ func TestLoadKeepsDefaultRunnerCommandsWhenCommandsAreOmitted(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			defaults := DefaultConfig()
 			path := writeTempWorkflow(t, `---
 repo:
   owner: acme
@@ -104,8 +105,8 @@ Prompt body
 			if err != nil {
 				t.Fatalf("Load(commands omitted): %v", err)
 			}
-			if wf.Config.Codex.Command != DefaultCodexCommand || wf.Config.Claude.Command != "claude" {
-				t.Fatalf("default runner commands = codex %q, claude %q; want %q/%q", wf.Config.Codex.Command, wf.Config.Claude.Command, DefaultCodexCommand, "claude")
+			if wf.Config.Codex.Command != defaults.Codex.Command || wf.Config.Claude.Command != defaults.Claude.Command {
+				t.Fatalf("default runner commands = codex %q, claude %q; want %q/%q", wf.Config.Codex.Command, wf.Config.Claude.Command, defaults.Codex.Command, defaults.Claude.Command)
 			}
 		})
 	}

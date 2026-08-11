@@ -79,9 +79,11 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 }
 
 // admitSnapshot is the single boundary between parsed workflow input and an
-// effective typed snapshot. Both cold start and WorkflowRuntime reload call
-// Load, so keeping adapter admission, semantic validation, and normalization
-// here prevents any partial config/prompt/fingerprint publication on failure.
+// effective typed snapshot. Load resolves defaults and $VAR indirections
+// before this call, so provider and command checks see effective values. Both
+// cold start and WorkflowRuntime reload call Load; keeping adapter admission,
+// semantic validation, and normalization here prevents any partial
+// config/prompt/fingerprint publication on failure.
 func admitSnapshot(path string, cfg *Config, hasFrontMatter bool) error {
 	if hasFrontMatter {
 		if err := validateTrackerAndRepo(path, *cfg); err != nil {

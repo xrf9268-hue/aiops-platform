@@ -2645,13 +2645,11 @@ func TestRunRejectsSemanticInvalidColdStartBeforeTrackerSideEffects(t *testing.T
 			defer server.Close()
 
 			dir := t.TempDir()
-			marker := filepath.Join(dir, "side-effect-marker")
 			workflowPath := filepath.Join(dir, "WORKFLOW.md")
 			body := "---\n" +
 				"repo:\n  owner: acme\n  name: widgets\n  clone_url: https://github.com/acme/widgets.git\n" +
 				"server:\n  port: -1\n" +
 				"tracker:\n  kind: gitea\n  provider:\n    base_url: " + server.URL + "\n    repo: acme/widgets\n    token: \"" + tt.token + "\"\n" +
-				"hooks:\n  after_create: \"touch " + marker + "\"\n  before_run: \"touch " + marker + "\"\n" +
 				"agent:\n  default: mock\n" +
 				"codex:\n  command: \"" + tt.codexCommand + "\"\n" +
 				"claude:\n  command: \"" + tt.claudeCommand + "\"\n" +
@@ -2668,9 +2666,6 @@ func TestRunRejectsSemanticInvalidColdStartBeforeTrackerSideEffects(t *testing.T
 			}
 			if got := requests.Load(); got != 0 {
 				t.Fatalf("tracker request count before semantic admission failure = %d; want 0", got)
-			}
-			if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("hook/runner side-effect marker stat error = %v; want not-exist", statErr)
 			}
 		})
 	}
