@@ -27,7 +27,7 @@ Handoff:
 
 Rules:
 - Do not touch secrets, credentials, production deployment files, or database migrations unless explicitly requested.
-- Prefer a small change over a broad refactor.
+- Prefer a coherent, issue-scoped change over a broad unrelated refactor.
 - If blocked, explain the blocker and stop.`
 }
 

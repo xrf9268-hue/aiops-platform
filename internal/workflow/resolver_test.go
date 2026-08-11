@@ -43,6 +43,13 @@ func TestResolve_NoRootWorkflowIgnoresLegacyFallbacks(t *testing.T) {
 	if wf.Config.Repo.CloneURL != "" {
 		t.Fatalf("CloneURL = %q, want empty default; legacy fallback must not load", wf.Config.Repo.CloneURL)
 	}
+	wantScopeRule := "Prefer a coherent, issue-scoped change over a broad unrelated refactor."
+	if !strings.Contains(wf.PromptTemplate, wantScopeRule) {
+		t.Fatalf("PromptTemplate = %q, want scope rule %q", wf.PromptTemplate, wantScopeRule)
+	}
+	if strings.Contains(wf.PromptTemplate, "Prefer a small change") {
+		t.Fatalf("PromptTemplate = %q, want retired qualitative size guidance removed", wf.PromptTemplate)
+	}
 }
 
 // TestResolve_FindsRootWorkflowFile covers the most common case: a
