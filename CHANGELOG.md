@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.19](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.18...v0.1.19) (2026-08-11)
+
+
+### Features
+
+* **tracker:** adopt adapter-owned tracker.provider config ([#1170](https://github.com/xrf9268-hue/aiops-platform/issues/1170)) ([d3cdd23](https://github.com/xrf9268-hue/aiops-platform/commit/d3cdd23cff47cb00559b034670e2c37a7604c99b))
+
+
+### Bug Fixes
+
+* **workflow:** reject semantically invalid snapshots before scheduling ([#1172](https://github.com/xrf9268-hue/aiops-platform/issues/1172)) ([e9dd650](https://github.com/xrf9268-hue/aiops-platform/commit/e9dd65031868455c7766c7e94e76c3e8c4232f6b))
+
 ## [0.1.18](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.17...v0.1.18) (2026-08-11)
 
 
