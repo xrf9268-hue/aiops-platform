@@ -2095,7 +2095,7 @@ func TestWorkerEntrypointDoesNotRequirePostgresQueue(t *testing.T) {
 func TestLoadWorkflowForStartupReconcileUsesConfiguredWorkflowPath(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "linear-workflow.md")
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n  active_states: [\"Todo\"]\n  terminal_states: [\"Done\"]\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n  active_states: [\"Todo\"]\n  terminal_states: [\"Done\"]\n---\nprompt\n"
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
@@ -2130,7 +2130,7 @@ func TestLoadWorkflowForStartupReconcileUsesConfiguredWorkflowPath(t *testing.T)
 func TestResolveStartupWorkflowUsesPositionalPath(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "service-WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nservice prompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nservice prompt\n"
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
@@ -2181,7 +2181,7 @@ func TestResolveStartupWorkflowDefaultsToCwdWorkflowOnly(t *testing.T) {
 func TestLoadWorkflowForStartupReconcileLogsConfiguredGiteaWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "gitea-workflow.md")
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n  provider:\n    token: test-gitea-token\n---\nprompt\n"
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
@@ -2212,7 +2212,7 @@ func TestLoadWorkflowForStartupReconcileLogsConfiguredGiteaWorkflow(t *testing.T
 
 func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	cfg := workflow.DefaultConfig()
-	cfg.Tracker.APIKey = "tracker-secret"
+	cfg.Tracker.Provider = map[string]any{"api_key": "tracker-secret", "project_slug": "platform"}
 	cfg.Hooks = workflow.WorkspaceHooks{
 		BeforeRemove:   workflow.WorkspaceHook{Commands: []string{"printf top-level"}},
 		TimeoutMs:      1234,
@@ -2229,8 +2229,8 @@ func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	if !reflect.DeepEqual(reconcile.HookEnvPassthrough, []string{"AIOPS_TRACKER_SECRET"}) {
 		t.Fatalf("HookEnvPassthrough = %#v, want top-level effective passthrough", reconcile.HookEnvPassthrough)
 	}
-	if reconcile.WorkflowConfig.Tracker.APIKey != cfg.Tracker.APIKey {
-		t.Fatalf("WorkflowConfig.Tracker.APIKey = %q, want startup workflow config to feed before_remove env deny", reconcile.WorkflowConfig.Tracker.APIKey)
+	if reconcile.WorkflowConfig.Tracker.Provider["api_key"] != cfg.Tracker.Provider["api_key"] {
+		t.Fatalf("WorkflowConfig.Tracker.Provider[api_key] = %q, want startup workflow config to feed before_remove env deny", reconcile.WorkflowConfig.Tracker.Provider["api_key"])
 	}
 }
 
@@ -2319,6 +2319,9 @@ func writeWorkflowForStartupReconcileTest(t *testing.T, extraFrontMatter string)
   default_branch: main
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ` + "---\nPrompt body\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
@@ -2326,12 +2329,11 @@ tracker:
 	return path
 }
 
-func TestTrackerClientForWorkflowUsesGiteaEndpointBeforeEnvBaseURL(t *testing.T) {
+func TestTrackerClientForWorkflowUsesGiteaProviderURLBeforeEnvBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.Endpoint = "https://gitea-endpoint.example.test/"
-	cfg.Tracker.ProjectSlug = "https://gitea-legacy.example.test/"
+	cfg.Tracker.Provider = map[string]any{"token": "gitea-token", "base_url": "https://gitea-endpoint.example.test/"}
 	cfg.Repo.Owner = "owner"
 	cfg.Repo.Name = "repo"
 
@@ -2344,15 +2346,15 @@ func TestTrackerClientForWorkflowUsesGiteaEndpointBeforeEnvBaseURL(t *testing.T)
 		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
 	}
 	if giteaClient.BaseURL != "https://gitea-endpoint.example.test" {
-		t.Fatalf("base URL = %q, want tracker.endpoint without trailing slash", giteaClient.BaseURL)
+		t.Fatalf("base URL = %q, want tracker.provider.base_url without trailing slash", giteaClient.BaseURL)
 	}
 }
 
-func TestTrackerClientForWorkflowIgnoresGiteaProjectSlugBaseURL(t *testing.T) {
+func TestTrackerClientForWorkflowUsesGiteaEnvFallbackWhenProviderURLMissing(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.ProjectSlug = "https://gitea-legacy.example.test/"
+	cfg.Tracker.Provider = map[string]any{"token": "gitea-token"}
 	cfg.Repo.Owner = "owner"
 	cfg.Repo.Name = "repo"
 
@@ -2365,11 +2367,11 @@ func TestTrackerClientForWorkflowIgnoresGiteaProjectSlugBaseURL(t *testing.T) {
 		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
 	}
 	if giteaClient.BaseURL != "https://gitea-env.example.test" {
-		t.Fatalf("base URL = %q, want GITEA_BASE_URL fallback when tracker.endpoint is empty", giteaClient.BaseURL)
+		t.Fatalf("base URL = %q, want GITEA_BASE_URL fallback when tracker.provider.base_url is absent", giteaClient.BaseURL)
 	}
 }
 
-func TestTrackerClientForWorkflowUsesGiteaEnvFallbackWhenEndpointEmpty(t *testing.T) {
+func TestTrackerClientForWorkflowUsesGiteaEnvFallbackWithEmptyProvider(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
@@ -2484,7 +2486,7 @@ func TestTrackerClientForWorkflowUsesGitHubDefaultWhenNoEnvAndNoEndpoint(t *test
 	cfg.Repo.Owner = "owner"
 	cfg.Repo.Name = "repo"
 	cfg.Tracker.Kind = "github"
-	cfg.Tracker.APIKey = "github-token"
+	cfg.Tracker.Provider = map[string]any{"token": "github-token"}
 
 	client, err := trackerClientForWorkflow(cfg)
 	if err != nil {
@@ -2504,8 +2506,7 @@ func TestTrackerClientForWorkflowBuildsGitHubClient(t *testing.T) {
 	cfg.Repo.Owner = "xrf9268-hue"
 	cfg.Repo.Name = "aiops-platform"
 	cfg.Tracker.Kind = "github"
-	cfg.Tracker.APIKey = "github-token"
-	cfg.Tracker.Endpoint = "https://api.github.test"
+	cfg.Tracker.Provider = map[string]any{"token": "github-token", "api_url": "https://api.github.test"}
 
 	client, err := trackerClientForWorkflow(cfg)
 	if err != nil {
@@ -2672,7 +2673,7 @@ func TestLoadWorkflowForStartupReconcileClassifiesConfiguredPromptOnlyWorkflow(t
 func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}

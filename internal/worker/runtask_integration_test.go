@@ -95,7 +95,9 @@ repo:
   clone_url: $REPO_URL
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 agent:
   default: mock
 ---
@@ -339,7 +341,7 @@ func TestRunTaskWorkspaceHooksRejectTrackerAPIKeyValuePassthrough(t *testing.T) 
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Tracker.APIKey = "task-tracker-secret"
+	cfg.Workflow.Config.Tracker.Provider = map[string]any{"api_key": "task-tracker-secret", "project_slug": "platform"}
 	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
 		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
 		AfterCreate:    workflow.WorkspaceHook{Commands: []string{hookEnvLogCommand("after_create")}},
@@ -372,9 +374,9 @@ func TestRunTaskWorkspaceHooksRejectTrackerAPIKeyValuePassthrough(t *testing.T) 
 }
 
 func TestRunTaskWorkspaceHooksRejectTrackerAPIKeySourceEnvPassthrough(t *testing.T) {
-	workflowBody := strings.Replace(linearWorkflowBody, "  project_slug: platform\n", "  project_slug: platform\n  api_key: $AIOPS_TRACKER_SECRET\n", 1)
+	workflowBody := strings.Replace(linearWorkflowBody, "    api_key: test-linear-token\n", "    api_key: $AIOPS_TRACKER_SECRET\n", 1)
 	if workflowBody == linearWorkflowBody {
-		t.Fatal("test workflow fixture no longer contains tracker project_slug insertion point")
+		t.Fatal("test workflow fixture no longer contains tracker.provider.api_key replacement point")
 	}
 	t.Setenv("AIOPS_TRACKER_SECRET", "loaded-tracker-secret")
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, workflowBody)
@@ -708,7 +710,7 @@ func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Tracker.APIKey = "cleanup-tracker-secret"
+	cfg.Workflow.Config.Tracker.Provider = map[string]any{"api_key": "cleanup-tracker-secret", "project_slug": "platform"}
 	marker := filepath.Join(cfg.WorkspaceRoot, "before-remove.marker")
 	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
 		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
@@ -792,7 +794,7 @@ func TestRunTaskAfterRunHookRejectsTrackerAPIKeyValuePassthroughOnRunnerFailure(
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Tracker.APIKey = "runner-failure-tracker-secret"
+	cfg.Workflow.Config.Tracker.Provider = map[string]any{"api_key": "runner-failure-tracker-secret", "project_slug": "platform"}
 	cfg.Workflow.Config.Claude.Command = "exit 3"
 	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
 		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},

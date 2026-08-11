@@ -10,6 +10,10 @@ verify:
   commands: []
 tracker:
   kind: gitea
+  provider:
+    base_url: $GITEA_BASE_URL
+    token: $GITEA_TOKEN
+    repo: aiops-bot/demo-gitea-tracker
   active_states:
     - Todo
     - Rework

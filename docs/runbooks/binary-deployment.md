@@ -164,16 +164,15 @@ then unpack `worker` (and optionally `tui`) onto the host `PATH`.
 
 The worker reads its workflow from `AIOPS_WORKFLOW_PATH` and its fallback
 workspace root from `AIOPS_WORKSPACE_ROOT`. Tracker tokens are **not**
-read directly by the worker — they flow through `tracker.api_key: $VAR`
-expansion in `WORKFLOW.md` (see [`local-dev.md`](local-dev.md)
-"Missing tracker credentials"). Set `tracker.api_key` for your
-`tracker.kind`:
+generic core fields: each selected adapter reads its credential from
+`tracker.provider` and resolves a whole-value `$VAR` at workflow admission
+(see [`local-dev.md`](local-dev.md) "Missing tracker credentials"):
 
 | `tracker.kind` | `WORKFLOW.md` token reference |
 | --- | --- |
-| `linear` | `tracker.api_key: $LINEAR_API_KEY` |
-| `gitea`  | `tracker.api_key: $GITEA_TOKEN` |
-| `github` | `tracker.api_key: $GITHUB_TOKEN` |
+| `linear` | `tracker.provider.api_key: $LINEAR_API_KEY` |
+| `gitea`  | `tracker.provider.token: $GITEA_TOKEN` |
+| `github` | `tracker.provider.token: $GITHUB_TOKEN` |
 
 Lay down a config directory and an env file (never commit a real env
 file):
@@ -182,7 +181,7 @@ file):
 sudo install -d -o aiops -g aiops /etc/aiops-platform
 # Pick the example matching your tracker.kind: examples/WORKFLOW.md (linear),
 # examples/gitea-WORKFLOW.md, or examples/github-local-WORKFLOW.md.
-sudo cp examples/WORKFLOW.md /etc/aiops-platform/WORKFLOW.md   # edit tracker.api_key/kind
+sudo cp examples/WORKFLOW.md /etc/aiops-platform/WORKFLOW.md   # edit tracker.kind/provider
 sudo cp .env.example /etc/aiops-platform/worker.env           # fill in the token + paths
 sudo chmod 600 /etc/aiops-platform/worker.env
 ```
@@ -232,7 +231,7 @@ worker --print-config "$(dirname "$AIOPS_WORKFLOW_PATH")"
 ```bash
 export AIOPS_WORKFLOW_PATH=$PWD/WORKFLOW.md
 export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces   # any path the user can write
-export LINEAR_API_KEY=...        # only the var your WORKFLOW.md tracker.api_key references
+export LINEAR_API_KEY=...        # referenced by tracker.provider.api_key
 worker
 ```
 
@@ -318,7 +317,7 @@ sudo scripts/install.sh --prefix /usr/local
 # /usr/local is root-owned on a stock Mac, so create with sudo + -o "$USER".
 sudo install -d -o "$(id -un)" /usr/local/etc/aiops-platform
 sudo install -d -o "$(id -un)" /usr/local/var/aiops-platform
-cp examples/WORKFLOW.md /usr/local/etc/aiops-platform/WORKFLOW.md   # edit tracker.api_key/kind
+cp examples/WORKFLOW.md /usr/local/etc/aiops-platform/WORKFLOW.md   # edit tracker.kind/provider
 
 # install and load the agent (per-user; runs only while you are logged in)
 cp deploy/launchd/com.aiops-platform.worker.plist ~/Library/LaunchAgents/
@@ -370,8 +369,8 @@ binary.
 
 ## Common failure modes
 
-- **`missing_tracker_api_key` at startup** — `tracker.api_key` references
-  a `$VAR` that is unset. Confirm the env var is exported in the same
+- **`missing_tracker_secret` at startup** — the selected adapter's provider
+  secret is missing, empty, or references an unset `$VAR`. Confirm the env var is exported in the same
   environment as the worker (for systemd, that it is present in
   `EnvironmentFile`; for launchd, that the Keychain wrapper exported it).
 - **Agent cannot push** — the worker does not hold git credentials;

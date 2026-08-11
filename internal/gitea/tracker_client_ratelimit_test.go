@@ -16,7 +16,7 @@ func giteaRateLimitTestClient(t *testing.T, handler http.Handler) *TrackerClient
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, srv.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, srv.URL, "owner", "repo")
 	client.HTTP = srv.Client()
 	return client
 }

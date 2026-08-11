@@ -266,7 +266,7 @@ func TestRunWorkspaceHookEnvRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
 		`printf '<%s><%s>' "$EXTRA_BUILD_VAR" "$AIOPS_TRACKER_SECRET"`,
 	}}
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{APIKey: "hook-tracker-secret"},
+		Tracker: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "hook-tracker-secret", "project_slug": "platform"}},
 	}
 
 	results, err := RunWorkspaceHook(
@@ -349,7 +349,7 @@ func TestSubprocessEnvSkipsUnsetPassthroughNames(t *testing.T) {
 
 func TestSubprocessEnvWithLookupBoundaryTable(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{APIKey: "configured-tracker-secret"},
+		Tracker: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "configured-tracker-secret", "project_slug": "platform"}},
 	}
 	lookupValues := map[string]string{
 		"PATH":                       "/worker/path",

@@ -46,7 +46,7 @@ func (t *staticResponseTransport) RoundTrip(*http.Request) (*http.Response, erro
 }
 
 func newDrainTestTrackerClient(status int, body *drainRecordingBody) *TrackerClient {
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "http://gitea.invalid", "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, "http://gitea.invalid", "owner", "repo")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{status: status, body: body}}
 	return client
 }
@@ -98,7 +98,7 @@ func TestTrackerClientListIssuesPageDrainsErrorBody(t *testing.T) {
 
 func TestTrackerClientListIssuesPageRejectsOversizedSuccessBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`[]`)}
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "http://gitea.invalid", "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, "http://gitea.invalid", "owner", "repo")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{
 		status:        http.StatusOK,
 		body:          body,
@@ -114,7 +114,7 @@ func TestTrackerClientListIssuesPageRejectsOversizedSuccessBody(t *testing.T) {
 
 func TestTrackerClientGetIssueByNumberRejectsOversizedSuccessBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "http://gitea.invalid", "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, "http://gitea.invalid", "owner", "repo")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{
 		status:        http.StatusOK,
 		body:          body,

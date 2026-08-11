@@ -73,7 +73,7 @@ func codexSchemaTestInput(t *testing.T) RunInput {
 	t.Helper()
 	in := appServerInput(filepath.Join(t.TempDir(), "clone"))
 	in.Workflow.Config.Tracker.Kind = "linear"
-	in.Workflow.Config.Tracker.APIKey = "linear-secret"
+	in.Workflow.Config.Tracker.Provider = map[string]any{"api_key": "linear-secret", "project_slug": "platform"}
 	return in
 }
 

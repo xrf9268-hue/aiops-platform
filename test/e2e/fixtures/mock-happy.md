@@ -7,6 +7,10 @@ repo:
   clone_url: http://localhost:3000/aiops-bot/demo-happy.git
 tracker:
   kind: gitea
+  provider:
+    base_url: __GITEA_BASE_URL__
+    token: $AIOPS_E2E_GITEA_TOKEN
+    repo: __GITEA_REPO__
 agent:
   default: mock
   timeout: 5m

@@ -82,7 +82,7 @@ func TestDrainAndCloseBoundsHugeBody(t *testing.T) {
 
 func TestLinearGraphQLRejectsOversizedSuccessBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
-	client := NewLinearClient(workflow.TrackerConfig{APIKey: "test-key"})
+	client := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "test-key"}})
 	client.BaseURL = "http://linear.invalid/graphql"
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{
 		status:        http.StatusOK,
@@ -100,7 +100,7 @@ func TestLinearGraphQLRejectsOversizedSuccessBody(t *testing.T) {
 
 func TestGitHubListIssuesPageRejectsOversizedSuccessBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`[]`)}
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, "http://github.invalid", "acme", "api")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{
 		status:        http.StatusOK,
 		body:          body,
@@ -116,7 +116,7 @@ func TestGitHubListIssuesPageRejectsOversizedSuccessBody(t *testing.T) {
 
 func TestGitHubListOpenPullRequestsPageRejectsOversizedSuccessBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`[]`)}
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, "http://github.invalid", "acme", "api")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{
 		status:        http.StatusOK,
 		body:          body,
@@ -132,7 +132,7 @@ func TestGitHubListOpenPullRequestsPageRejectsOversizedSuccessBody(t *testing.T)
 
 func TestGitHubGetIssueByNumberRejectsOversizedSuccessBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, "http://github.invalid", "acme", "api")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{
 		status:        http.StatusOK,
 		body:          body,
@@ -148,7 +148,7 @@ func TestGitHubGetIssueByNumberRejectsOversizedSuccessBody(t *testing.T) {
 
 func TestGitHubBlockersRejectsOversizedSuccessBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, "http://github.invalid", "acme", "api")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{
 		status:        http.StatusOK,
 		body:          body,
@@ -212,7 +212,7 @@ func reuseTestGitHubClient(t *testing.T, srv *httptest.Server) *GitHubClient {
 	t.Helper()
 	transport := &http.Transport{MaxConnsPerHost: 1}
 	t.Cleanup(transport.CloseIdleConnections)
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, srv.URL, "acme", "api")
 	client.HTTP = &http.Client{Transport: transport}
 	return client
 }
@@ -278,7 +278,7 @@ func TestGitHubGetIssueByNumberDrainsNonSuccessBodies(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body := &drainRecordingBody{reader: strings.NewReader(`{"message":"detail"}`)}
-			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+			client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, "http://github.invalid", "acme", "api")
 			client.HTTP = &http.Client{Transport: &staticResponseTransport{status: tc.status, body: body}}
 
 			_, found, err := client.getIssueByNumber(context.Background(), 7)
@@ -295,7 +295,7 @@ func TestGitHubGetIssueByNumberDrainsNonSuccessBodies(t *testing.T) {
 
 func TestGitHubListOpenPullRequestsPageDrainsErrorBody(t *testing.T) {
 	body := &drainRecordingBody{reader: strings.NewReader(`{"message":"detail"}`)}
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, "http://github.invalid", "acme", "api")
 	client.HTTP = &http.Client{Transport: &staticResponseTransport{status: http.StatusInternalServerError, body: body}}
 
 	_, _, err := client.listOpenPullRequestsPage(context.Background(), 1)
@@ -323,7 +323,7 @@ func TestLinearGraphQLDrainsErrorResponseBodies(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body := &drainRecordingBody{reader: strings.NewReader(`{"errors":[{"message":"detail"}]}`)}
-			client := NewLinearClient(workflow.TrackerConfig{APIKey: "test-key"})
+			client := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "test-key"}})
 			client.BaseURL = "http://linear.invalid"
 			client.HTTP = &http.Client{Transport: &staticResponseTransport{status: tc.status, body: body}}
 

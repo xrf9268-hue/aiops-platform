@@ -66,12 +66,8 @@ func (f *fakeGiteaLabelServer) recordedSequence() ([]string, []string, []string)
 func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	token := "gitea_super_secret_token"
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
-		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
-		Tracker: workflow.TrackerConfig{
-			Kind:     "gitea",
-			APIKey:   token,
-			Endpoint: "https://gitea.example.test/",
-		},
+		Repo:    workflow.RepoConfig{Owner: "owner", Name: "repo"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": token, "base_url": "https://gitea.example.test/"}, Kind: "gitea"},
 	}})
 
 	tool, ok := tools.Lookup("gitea_issue_labels")
@@ -124,20 +120,15 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	}
 }
 
-func TestDynamicToolsUseGiteaEndpointBeforeProjectSlugAndEnvBaseURL(t *testing.T) {
+func TestDynamicToolsUseGiteaProviderEndpointAndRepo(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "http://127.0.0.1:1")
 	server := &fakeGiteaLabelServer{}
 	httpServer := httptest.NewServer(server.handler())
 	defer httpServer.Close()
 
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
-		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
-		Tracker: workflow.TrackerConfig{
-			Kind:        "gitea",
-			APIKey:      "token",
-			Endpoint:    httpServer.URL + "/",
-			ProjectSlug: "http://127.0.0.1:1",
-		},
+		Repo:    workflow.RepoConfig{Owner: "fallback-owner", Name: "fallback-repo"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": "token", "base_url": httpServer.URL + "/", "repo": "owner/repo"}, Kind: "gitea"},
 	}})
 	tool, ok := tools.Lookup("gitea_issue_labels")
 	if !ok {
@@ -448,7 +439,7 @@ func TestDynamicToolsDoNotExposeGiteaToolsWithoutGiteaToken(t *testing.T) {
 	for _, wf := range []workflow.Workflow{
 		{},
 		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Kind: "gitea"}}},
-		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "token"}}},
+		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "token"}, Kind: "linear"}}},
 	} {
 		tools := DynamicToolsForWorkflow(wf)
 		if _, ok := tools.Lookup("gitea_issue_labels"); ok {
@@ -460,11 +451,8 @@ func TestDynamicToolsDoNotExposeGiteaToolsWithoutGiteaToken(t *testing.T) {
 func TestDynamicToolsDoNotExposeGiteaToolsWithoutBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "")
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
-		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
-		Tracker: workflow.TrackerConfig{
-			Kind:   "gitea",
-			APIKey: "token",
-		},
+		Repo:    workflow.RepoConfig{Owner: "owner", Name: "repo"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, Kind: "gitea"},
 	}})
 	if _, ok := tools.Lookup("gitea_issue_labels"); ok {
 		t.Fatalf("gitea_issue_labels advertised without configured Gitea base URL")
@@ -474,11 +462,8 @@ func TestDynamicToolsDoNotExposeGiteaToolsWithoutBaseURL(t *testing.T) {
 func TestDynamicToolsExposeGiteaIssueLabelsWithEnvBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea.env.example/")
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
-		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
-		Tracker: workflow.TrackerConfig{
-			Kind:   "gitea",
-			APIKey: "token",
-		},
+		Repo:    workflow.RepoConfig{Owner: "owner", Name: "repo"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, Kind: "gitea"},
 	}})
 	if _, ok := tools.Lookup("gitea_issue_labels"); !ok {
 		t.Fatalf("gitea_issue_labels not advertised with env Gitea base URL; tools=%#v", tools.Names())
@@ -1250,10 +1235,8 @@ func TestDynamicToolsWireGiteaCurrentIssueClassification(t *testing.T) {
 
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
-		Tracker: workflow.TrackerConfig{
-			Kind:           "gitea",
-			APIKey:         "token",
-			Endpoint:       server.URL,
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": "token", "base_url": server.URL}, Kind: "gitea",
+
 			ActiveStates:   []string{"Todo", "In Progress"},
 			TerminalStates: []string{"Done", "Canceled"},
 		},

@@ -18,15 +18,15 @@ func (c *GitHubClient) PaginationCapHits() int64 {
 }
 
 func (c *GitHubClient) issueMaxPages() int {
-	if c != nil && c.Config.PaginationMaxPages > 0 {
-		return c.Config.PaginationMaxPages
+	if c != nil && c.PaginationMaxPages > 0 {
+		return c.PaginationMaxPages
 	}
 	return githubMaxIssuePages
 }
 
 func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) { //nolint:gocognit // baseline (#521)
 	if strings.TrimSpace(c.Token) == "" {
-		return nil, fmt.Errorf("GitHub tracker api_key is required")
+		return nil, fmt.Errorf("GitHub tracker token is required")
 	}
 	if strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Repo) == "" {
 		return nil, fmt.Errorf("repo.owner and repo.name are required for GitHub tracker polling")

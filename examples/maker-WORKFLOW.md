@@ -7,7 +7,7 @@ repo:
   name: your-repo
   default_branch: main
   # The maker's push + PR credential: a low-privilege MAKER bot token embedded
-  # as HTTP basic-auth. The tracker api_key below never reaches the agent
+  # as HTTP basic-auth. The tracker provider token below never reaches the agent
   # (env-passthrough deny list), so this remote credential is what the agent
   # uses to push and open the PR. Whole-value $VAR only (embedded ${VAR} stays
   # literal), so reference a full URL env var:
@@ -15,10 +15,11 @@ repo:
 
 tracker:
   kind: gitea
-  endpoint: http://gitea.local
+  provider:
+    base_url: http://gitea.local
+    token: $GITEA_TOKEN
   # Worker-held token for polling + the gitea_issue_labels handoff proxy;
   # expanded from the worker env, never exposed to the agent.
-  api_key: $GITEA_TOKEN
   # The maker owns implementation states; "Human Review" is the handoff state
   # it never crosses (the reviewer issues Done/Rework).
   active_states:

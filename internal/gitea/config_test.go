@@ -7,21 +7,16 @@ import (
 )
 
 func TestBaseURLFromTrackerConfigUsesEndpointBeforeFallback(t *testing.T) {
-	got := BaseURLFromTrackerConfig(workflow.TrackerConfig{
-		Endpoint:    " https://gitea-endpoint.example.test/ ",
-		ProjectSlug: "https://gitea-legacy.example.test/",
-	}, "https://gitea-env.example.test/")
+	got := BaseURLFromTrackerConfig(workflow.TrackerConfig{Provider: map[string]any{"base_url": " https://gitea-endpoint.example.test/ "}}, "https://gitea-env.example.test/")
 	if got != "https://gitea-endpoint.example.test" {
-		t.Fatalf("BaseURLFromTrackerConfig = %q, want tracker.endpoint without trailing slash", got)
+		t.Fatalf("BaseURLFromTrackerConfig = %q, want tracker.provider.base_url without trailing slash", got)
 	}
 }
 
 func TestBaseURLFromTrackerConfigIgnoresProjectSlugAsFallback(t *testing.T) {
-	got := BaseURLFromTrackerConfig(workflow.TrackerConfig{
-		ProjectSlug: " https://gitea-legacy.example.test/ ",
-	}, "https://gitea-env.example.test/")
+	got := BaseURLFromTrackerConfig(workflow.TrackerConfig{Provider: map[string]any{"future_scope": "unchanged"}}, "https://gitea-env.example.test/")
 	if got != "https://gitea-env.example.test" {
-		t.Fatalf("BaseURLFromTrackerConfig = %q, want fallback without Gitea tracker.project_slug", got)
+		t.Fatalf("BaseURLFromTrackerConfig = %q, want fallback when tracker.provider.base_url is absent", got)
 	}
 }
 

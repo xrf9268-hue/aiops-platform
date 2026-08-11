@@ -9,13 +9,11 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-// validateDispatchPreflight is the SPEC §8.1 step 2 / §6.3 per-tick
-// dispatch-preflight check. Startup loader validation only covers schema
-// shape; this function re-validates the *resolved* runtime view of the
-// workflow (post-`$VAR` expansion) on every poll tick so a token rotation,
-// subprocess unset, or hot-edit of operator env that leaves a key empty
-// at runtime surfaces as a typed `dispatch_preflight_failed` event rather
-// than a tracker-specific transport error.
+// validateDispatchPreflight is the SPEC §8.1 step 2 / §6.3 per-tick check for
+// core scheduler invariants. The workflow loader and reloader admit the
+// selected adapter's effective profile before publishing a config snapshot;
+// #1144 deliberately does not repeat adapter semantics inside the
+// orchestrator. Last-good semantic reload admission remains tracked by #1145.
 //
 // Returned error joins every individual failure so the operator-visible
 // event message carries the full reason set, not just the first one.
@@ -26,12 +24,6 @@ func validateDispatchPreflight(cfg workflow.Config) error {
 		errs = append(errs, errors.New("tracker.kind missing"))
 	} else if !workflow.IsSupportedTrackerKind(kind) {
 		errs = append(errs, fmt.Errorf("tracker.kind unsupported: %q", kind))
-	}
-	if strings.TrimSpace(cfg.Tracker.APIKey) == "" {
-		errs = append(errs, errors.New("tracker.api_key empty after $VAR resolution"))
-	}
-	if kind == "linear" && strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" {
-		errs = append(errs, errors.New("tracker.project_slug required for linear"))
 	}
 	if strings.TrimSpace(cfg.Codex.Command) == "" {
 		errs = append(errs, errors.New("codex.command empty"))

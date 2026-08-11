@@ -30,6 +30,9 @@ repo:
   clone_url: git@example.com:owner/repo.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -48,7 +51,9 @@ repo:
   clone_url: git@example.com:owner/repo.git
 tracker:
   kind: linear
-  project_slug: acme
+  provider:
+    api_key: test-linear-token
+    project_slug: acme
   required_labels:
     - "  AIOps-Ready  "
     - aiops-ready
@@ -75,7 +80,9 @@ repo:
   clone_url: git@example.com:owner/repo.git
 tracker:
   kind: linear
-  project_slug: acme
+  provider:
+    api_key: test-linear-token
+    project_slug: acme
 ---
 Prompt body
 `)
@@ -121,6 +128,9 @@ repo:
   clone_url: git@example.com:owner/repo.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -143,6 +153,9 @@ repo:
   clone_url: git@example.com:owner/repo.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -161,6 +174,9 @@ repo:
   clone_url: git@example.com:owner/repo.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -182,6 +198,9 @@ repo:
   clone_url: git@example.com:owner/repo.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -206,6 +225,9 @@ polling:
   interval_ms: 12345
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -226,6 +248,9 @@ repo:
   clone_url: https://github.com/xrf9268-hue/aiops-platform.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
   poll_interval_ms: 45678
 ---
 Prompt body
@@ -249,6 +274,9 @@ repo:
   clone_url: https://github.com/xrf9268-hue/aiops-platform.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
   poll_interval_ms: 45678
 polling:
   interval_ms: 12345
@@ -274,6 +302,9 @@ repo:
   clone_url: https://github.com/xrf9268-hue/aiops-platform.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -296,6 +327,9 @@ polling:
   interval_ms: 0
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -321,6 +355,9 @@ workspace:
   root: .aiops-workspaces
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `
@@ -356,6 +393,9 @@ workspace:
   root: `+root+`
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -389,6 +429,9 @@ future_extension:
   enabled: true
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -436,6 +479,9 @@ pr:
   draft: true
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -464,6 +510,9 @@ safety:
     - git remote for this repository
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -495,6 +544,9 @@ agent:
     rework: 1
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -528,6 +580,9 @@ agent:
     in_progress: 5
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -560,6 +615,9 @@ agent:
     "": 1
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `,
@@ -578,6 +636,9 @@ agent:
     rework: 0
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `,
@@ -624,6 +685,9 @@ agent:
   max_retry_backoff_ms: 45000
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -646,6 +710,9 @@ agent:
   max_continuation_turns: 7
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -668,6 +735,9 @@ agent:
   max_turns: 12
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -690,6 +760,9 @@ agent:
   max_retry_backoff_ms: 0
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -712,6 +785,9 @@ agent:
   max_turns: 0
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -736,6 +812,9 @@ agent:
   max_continuation_turns: %d
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `, value)
@@ -760,6 +839,9 @@ agent:
   max_tokens_per_claim: -1
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -785,6 +867,9 @@ agent:
   ` + key + `: 3
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -821,6 +906,9 @@ hooks:
   timeout_ms: 1234
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -861,6 +949,9 @@ hooks:
   before_remove: printf before_remove
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -894,6 +985,9 @@ hooks:
     - TOP_VAR
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -924,6 +1018,9 @@ workspace:
       - printf legacy-after-create
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -952,6 +1049,9 @@ hooks:
   timeout_ms: -1
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -996,6 +1096,9 @@ sandbox:
     - ~/.config/aiops/token
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1046,6 +1149,9 @@ sandbox:
     - PATH
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1077,6 +1183,9 @@ sandbox:
     - PATH
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1110,6 +1219,9 @@ sandbox:
     - PATH
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1143,6 +1255,9 @@ sandbox:
     - PATH
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1177,6 +1292,9 @@ sandbox:
     - PATH
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1211,6 +1329,9 @@ sandbox:
     - PATH
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1239,6 +1360,9 @@ sandbox:
   backend: bubblewrap
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1267,6 +1391,9 @@ sandbox:
   backend: vmagic
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1295,6 +1422,9 @@ sandbox:
   backend: none
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 hello
 `
@@ -1316,7 +1446,7 @@ hello
 func TestLoadAppliesAgentTimeoutDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\n  default_branch: main\ntracker:\n  kind: gitea\n---\nhello\n"
+	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\n  default_branch: main\ntracker:\n  kind: gitea\n  provider:\n    token: test-gitea-token\n---\nhello\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1334,7 +1464,7 @@ func TestLoadAppliesAgentTimeoutDefaults(t *testing.T) {
 func TestLoadHonorsExplicitAgentTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\nagent:\n  timeout: 5m\ntracker:\n  kind: gitea\n---\nhello\n"
+	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\nagent:\n  timeout: 5m\ntracker:\n  kind: gitea\n  provider:\n    token: test-gitea-token\n---\nhello\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1368,6 +1498,9 @@ agent:
   fallback: claude
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -1394,7 +1527,7 @@ prompt body
 // verification and pre-push secret scanning are the agent's job now.
 // verify.commands stays valid.
 func TestLoad_RejectsRemovedVerifyExecutionFields(t *testing.T) {
-	const head = "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n"
+	const head = "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n  provider:\n    token: test-gitea-token\n"
 	for _, tc := range []struct{ name, block string }{
 		{"timeout", "verify:\n  timeout: 5m\n"},
 		{"allow_failure", "verify:\n  allow_failure: true\n"},
@@ -1440,7 +1573,7 @@ func TestLoad_RejectsRemovedVerifyExecutionFields(t *testing.T) {
 // or policy.max_changed_files must not believe the worker still enforces them.
 // policy.mode stays valid.
 func TestLoad_RejectsRemovedPolicyFields(t *testing.T) {
-	const head = "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n"
+	const head = "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n  provider:\n    token: test-gitea-token\n"
 	for _, tc := range []struct{ name, block string }{
 		{"policy.allow_paths", "policy:\n  allow_paths:\n    - src/**\n"},
 		{"policy.deny_paths", "policy:\n  deny_paths:\n    - .github/**\n"},
@@ -1502,6 +1635,9 @@ codex:
   profile: safe
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -1540,6 +1676,9 @@ claude:
   profile: safe
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -1577,6 +1716,9 @@ codex:
   command: ` + command + `
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -1644,6 +1786,9 @@ codex:
   command: ` + command + `
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -1680,6 +1825,9 @@ codex:
       rules: true
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -1717,6 +1865,9 @@ codex:
       rules: false
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt body
 `
@@ -1743,6 +1894,9 @@ repo:
   name: r
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt
 `
@@ -1806,8 +1960,9 @@ repo:
   default_branch: main
 tracker:
   kind: github
-  api_key: $AIOPS_TEST_GITHUB_TOKEN
-  endpoint: https://api.github.test
+  provider:
+    token: $AIOPS_TEST_GITHUB_TOKEN
+    api_url: https://api.github.test
   active_states:
     - priority:p2
   terminal_states:
@@ -1825,11 +1980,11 @@ prompt
 	if wf.Config.Tracker.Kind != "github" {
 		t.Fatalf("tracker.kind = %q, want github", wf.Config.Tracker.Kind)
 	}
-	if wf.Config.Tracker.APIKey != "github-token" {
-		t.Fatalf("tracker.api_key did not expand from env: %q", wf.Config.Tracker.APIKey)
+	if wf.Config.Tracker.Provider["token"] != "github-token" {
+		t.Fatalf("tracker.provider.token did not expand from env: %q", wf.Config.Tracker.Provider["token"])
 	}
-	if wf.Config.Tracker.Endpoint != "https://api.github.test" {
-		t.Fatalf("tracker.endpoint = %q", wf.Config.Tracker.Endpoint)
+	if wf.Config.Tracker.Provider["api_url"] != "https://api.github.test" {
+		t.Fatalf("tracker.provider.api_url = %q", wf.Config.Tracker.Provider["api_url"])
 	}
 }
 
@@ -1841,16 +1996,17 @@ repo:
   clone_url: https://github.com/xrf9268-hue/aiops-platform.git
 tracker:
   kind: github
-  api_key: github-token
-  pagination_max_pages: 42
+  provider:
+    token: github-token
+    pagination_max_pages: 42
 ---
 prompt`)
 	wf, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := wf.Config.Tracker.PaginationMaxPages; got != 42 {
-		t.Fatalf("tracker.pagination_max_pages = %d, want 42", got)
+	if got := wf.Config.Tracker.Provider["pagination_max_pages"]; got != 42 {
+		t.Fatalf("tracker.provider.pagination_max_pages = %v, want 42", got)
 	}
 }
 
@@ -1862,16 +2018,17 @@ repo:
   clone_url: https://github.com/xrf9268-hue/aiops-platform.git
 tracker:
   kind: github
-  api_key: github-token
-  pagination_max_pages: -1
+  provider:
+    token: github-token
+    pagination_max_pages: -1
 ---
 prompt`)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("Load: expected error for negative tracker.pagination_max_pages")
+		t.Fatal("Load: expected error for negative tracker.provider.pagination_max_pages")
 	}
-	if !strings.Contains(err.Error(), "tracker.pagination_max_pages") || !strings.Contains(err.Error(), "greater than zero") {
-		t.Fatalf("Load error = %q, want tracker.pagination_max_pages guidance", err)
+	if !strings.Contains(err.Error(), "tracker.provider.pagination_max_pages") || !strings.Contains(err.Error(), "positive integer") {
+		t.Fatalf("Load error = %q, want tracker.provider.pagination_max_pages guidance", err)
 	}
 }
 
@@ -1896,6 +2053,9 @@ agent:
   default: ` + agent + `
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt
 `
@@ -1930,6 +2090,9 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt
 `
@@ -1981,6 +2144,9 @@ repo:
   clone_url: $AIOPS_TEST_REPO_URL
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt
 `
@@ -2005,7 +2171,9 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
   statuses:
     in_progress: "Doing"
 ---
@@ -2027,7 +2195,9 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2105,7 +2275,9 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2140,6 +2312,9 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt
 `))
@@ -2148,7 +2323,7 @@ prompt
 	}
 	cfg := wf.Config
 	cfg.Codex.TurnSandboxPolicy = CodexSandboxPolicy{Type: "bogus"}
-	err = validateConfig("WORKFLOW.md", cfg)
+	err = validateConfig("WORKFLOW.md", &cfg)
 	if err == nil {
 		t.Fatal("validateConfig(turn_sandbox_policy.type=bogus) = nil; want unsupported type rejection")
 	}
@@ -2164,7 +2339,9 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2223,7 +2400,9 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2253,7 +2432,9 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2277,9 +2458,8 @@ prompt
 }
 
 // TestDefaultConfig_PinsSPECAndTrackedDefaults separates implemented SPEC §6.4
-// defaults from current cross-provider state defaults. SPEC 0.0.2 makes state
-// defaults adapter-defined; D43 / #1144 owns that cutover. Each field keeps an
-// independent assertion so one regression cannot hide behind a sibling.
+// defaults from the documented scheduler-owned state defaults. Each field
+// keeps an independent assertion so one regression cannot hide behind a sibling.
 func TestDefaultConfig_PinsSPECAndTrackedDefaults(t *testing.T) {
 	t.Parallel()
 	cfg := DefaultConfig()
@@ -2307,11 +2487,11 @@ func TestDefaultConfig_PinsSPECAndTrackedDefaults(t *testing.T) {
 
 	wantActive := []string{"Todo", "In Progress"}
 	if !reflect.DeepEqual(cfg.Tracker.ActiveStates, wantActive) {
-		t.Errorf("Tracker.ActiveStates = %#v, want current D43 / #1144 implementation default %#v", cfg.Tracker.ActiveStates, wantActive)
+		t.Errorf("Tracker.ActiveStates = %#v, want scheduler default %#v", cfg.Tracker.ActiveStates, wantActive)
 	}
 	wantTerminal := []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"}
 	if !reflect.DeepEqual(cfg.Tracker.TerminalStates, wantTerminal) {
-		t.Errorf("Tracker.TerminalStates = %#v, want current D43 / #1144 implementation default %#v (order matters)", cfg.Tracker.TerminalStates, wantTerminal)
+		t.Errorf("Tracker.TerminalStates = %#v, want scheduler default %#v (order matters)", cfg.Tracker.TerminalStates, wantTerminal)
 	}
 
 	// SPEC §6.4 marks tracker.kind REQUIRED, so DefaultConfig must
@@ -2375,6 +2555,9 @@ repo:
   clone_url: https://example.invalid/repo.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 agent:
   max_concurrent_agents: 0
 ---
@@ -2401,6 +2584,9 @@ repo:
   clone_url: https://example.invalid/repo.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 prompt`)
 	wf, err := Load(path)
@@ -2419,7 +2605,9 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2458,6 +2646,9 @@ repo:
   clone_url: git@example.com:o/n.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 codex:
   env_passthrough:
     - LINEAR_API_KEY
@@ -2465,7 +2656,7 @@ codex:
 hello
 `,
 			want:       "codex.env_passthrough[0]",
-			wantReason: "tracker/API token",
+			wantReason: "tracker provider secret",
 		},
 		{
 			name: "claude_github_token",
@@ -2476,6 +2667,9 @@ repo:
   clone_url: git@example.com:o/n.git
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 claude:
   env_passthrough:
     - GITHUB_TOKEN
@@ -2483,7 +2677,7 @@ claude:
 hello
 `,
 			want:       "claude.env_passthrough[0]",
-			wantReason: "tracker/API token",
+			wantReason: "tracker provider secret",
 		},
 		{
 			name:     "codex_tracker_api_key_source_env",
@@ -2496,7 +2690,8 @@ repo:
   clone_url: git@example.com:o/n.git
 tracker:
   kind: gitea
-  api_key: $AIOPS_TEST_TRACKER_TOKEN
+  provider:
+    token: $AIOPS_TEST_TRACKER_TOKEN
 codex:
   env_passthrough:
     - AIOPS_TEST_TRACKER_TOKEN
@@ -2504,7 +2699,7 @@ codex:
 hello
 `,
 			want:       "codex.env_passthrough[0]",
-			wantReason: "tracker.api_key environment variable",
+			wantReason: "tracker provider secret",
 		},
 		{
 			name:     "sandbox_tracker_api_key_source_env",
@@ -2517,7 +2712,8 @@ repo:
   clone_url: git@example.com:o/n.git
 tracker:
   kind: gitea
-  api_key: $AIOPS_TEST_TRACKER_TOKEN
+  provider:
+    token: $AIOPS_TEST_TRACKER_TOKEN
 sandbox:
   enabled: true
   backend: bubblewrap
@@ -2527,7 +2723,7 @@ sandbox:
 hello
 `,
 			want:       "sandbox.env_allowlist[0]",
-			wantReason: "tracker.api_key environment variable",
+			wantReason: "tracker provider secret",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2554,7 +2750,8 @@ repo:
   clone_url: git@example.com:o/n.git
 tracker:
   kind: gitea
-  api_key: $AIOPS_TEST_TRACKER_TOKEN
+  provider:
+    token: $AIOPS_TEST_TRACKER_TOKEN
 ---
 hello
 `))
@@ -2564,8 +2761,8 @@ hello
 
 	t.Setenv("AIOPS_TEST_TRACKER_TOKEN", "rotated-secret")
 	reason := AgentEnvPassthroughDenyReasonForConfig("AIOPS_TEST_TRACKER_TOKEN", wf.Config)
-	if !strings.Contains(reason, "tracker.api_key environment variable") {
-		t.Fatalf("deny reason = %q, want tracker.api_key source env protection", reason)
+	if !strings.Contains(reason, "tracker provider secret") {
+		t.Fatalf("deny reason = %q, want tracker provider source env protection", reason)
 	}
 }
 

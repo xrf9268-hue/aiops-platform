@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	linearprofile "github.com/xrf9268-hue/aiops-platform/internal/trackerprofile/linear"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -105,10 +107,12 @@ func ErrorCategory(err error) (Category, bool) {
 }
 
 type LinearClient struct {
-	APIKey  string
-	BaseURL string
-	Config  workflow.TrackerConfig
-	HTTP    *http.Client
+	APIKey             string
+	BaseURL            string
+	ProjectSlug        string
+	PaginationMaxPages int
+	Config             workflow.TrackerConfig
+	HTTP               *http.Client
 	// RequestTimeout caps each Linear GraphQL request per SPEC §11.2.
 	// Defaults to 30s when zero.
 	RequestTimeout time.Duration
@@ -117,20 +121,29 @@ type LinearClient struct {
 const defaultLinearRequestTimeout = 30 * time.Second
 
 // DefaultLinearEndpoint is the Linear GraphQL endpoint per SPEC §5.3.1.
-const DefaultLinearEndpoint = "https://api.linear.app/graphql"
+const DefaultLinearEndpoint = linearprofile.DefaultEndpoint
 
 func NewLinearClient(cfg workflow.TrackerConfig) *LinearClient {
-	endpoint := strings.TrimSpace(cfg.Endpoint)
-	if endpoint == "" {
-		endpoint = DefaultLinearEndpoint
-	}
+	profile := linearProfileForConfig(cfg)
 	return &LinearClient{
-		APIKey:         cfg.APIKey,
-		BaseURL:        endpoint,
-		Config:         cfg,
-		HTTP:           http.DefaultClient,
-		RequestTimeout: defaultLinearRequestTimeout,
+		APIKey:             profile.APIKey,
+		BaseURL:            profile.Endpoint,
+		ProjectSlug:        profile.ProjectSlug,
+		PaginationMaxPages: profile.PaginationMaxPages,
+		Config:             cfg,
+		HTTP:               http.DefaultClient,
+		RequestTimeout:     defaultLinearRequestTimeout,
 	}
+}
+
+func linearProfileForConfig(cfg workflow.TrackerConfig) *linearprofile.Profile {
+	if profile, ok := cfg.ProviderProfile().(*linearprofile.Profile); ok {
+		return profile
+	}
+	if profile, err := linearprofile.Parse(cfg.Provider, os.LookupEnv); err == nil {
+		return profile
+	}
+	return &linearprofile.Profile{Endpoint: DefaultLinearEndpoint, PaginationMaxPages: maxLinearIssuePages}
 }
 
 func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
@@ -257,7 +270,7 @@ func (c *LinearClient) requireListIssuesConfig() (string, error) {
 	if c.APIKey == "" {
 		return "", NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
 	}
-	projectSlug := strings.TrimSpace(c.Config.ProjectSlug)
+	projectSlug := strings.TrimSpace(c.ProjectSlug)
 	if projectSlug == "" {
 		return "", NewError(CategoryMissingTrackerProjectSlug, "Linear project slug is required", nil)
 	}
@@ -265,8 +278,8 @@ func (c *LinearClient) requireListIssuesConfig() (string, error) {
 }
 
 func (c *LinearClient) issueMaxPages() int {
-	if c != nil && c.Config.PaginationMaxPages > 0 {
-		return c.Config.PaginationMaxPages
+	if c != nil && c.PaginationMaxPages > 0 {
+		return c.PaginationMaxPages
 	}
 	return maxLinearIssuePages
 }

@@ -165,7 +165,7 @@ func TestWebTodoBootstrapPreparesRunRoot(t *testing.T) {
 			want: []string{
 				"  owner: aiops-bot",
 				"  name: web-todo",
-				"  endpoint: https://gitea.example.test",
+				"    base_url: https://gitea.example.test",
 				"  root: " + filepath.Join(runRoot, "workspaces", "maker"),
 			},
 		},
@@ -175,7 +175,7 @@ func TestWebTodoBootstrapPreparesRunRoot(t *testing.T) {
 			want: []string{
 				"  owner: aiops-bot",
 				"  name: web-todo",
-				"  endpoint: https://gitea.example.test",
+				"    base_url: https://gitea.example.test",
 				"  root: " + filepath.Join(runRoot, "workspaces", "reviewer"),
 			},
 		},

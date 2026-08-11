@@ -361,7 +361,7 @@ func TestShellRunnerRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
 
 	wf := workflow.Workflow{Config: workflow.Config{
 		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
-		Tracker:   workflow.TrackerConfig{APIKey: "tracker-secret"},
+		Tracker:   workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "tracker-secret", "project_slug": "platform"}},
 		Claude: workflow.CommandConfig{
 			Command:        "env > shell-env.txt",
 			EnvPassthrough: []string{"AIOPS_RUNNER_CANARY", "AIOPS_TRACKER_SECRET"},
@@ -410,7 +410,7 @@ func TestAgentEnvRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
 	t.Setenv("AIOPS_TEST_TRACKER_TOKEN", "tracker-secret")
 
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{APIKey: "tracker-secret"},
+		Tracker: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "tracker-secret", "project_slug": "platform"}},
 	}
 	body := strings.Join(agentEnv([]string{"AIOPS_RUNNER_CANARY", "AIOPS_TEST_TRACKER_TOKEN"}, cfg), "\n")
 	if !strings.Contains(body, "AIOPS_RUNNER_CANARY=allowed-value") {
@@ -465,7 +465,7 @@ func TestAgentEnvForPreflightScopesCodexHomeToCodexAppServer(t *testing.T) {
 
 func TestAgentEnvWithLookupBoundaryTable(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{APIKey: "configured-tracker-secret"},
+		Tracker: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "configured-tracker-secret", "project_slug": "platform"}},
 	}
 	lookupValues := map[string]string{
 		"PATH":                       "/worker/path",

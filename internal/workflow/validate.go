@@ -19,10 +19,17 @@ import (
 // is exactly the slice order below. tracker.kind is validated first because
 // later validators branch on it (SPEC §6.4). Add new checks to the validator
 // whose slot preserves that precedence rather than appending blindly.
-func validateConfig(path string, cfg Config) error {
+func validateConfig(path string, cfg *Config) error {
+	if err := validateTrackerAndRepo(path, *cfg); err != nil {
+		return err
+	}
+	if err := validateSupportedTrackerKind(path, *cfg); err != nil {
+		return err
+	}
+	if err := admitTrackerProvider(path, cfg); err != nil {
+		return err
+	}
 	for _, validate := range []func(string, Config) error{
-		validateTrackerAndRepo,
-		validateLinearProjectSlug,
 		validateSupportedValues,
 		validateSandbox,
 		validateServerPort,
@@ -30,7 +37,7 @@ func validateConfig(path string, cfg Config) error {
 		validateAgentLimits,
 		validateTimeouts,
 	} {
-		if err := validate(path, cfg); err != nil {
+		if err := validate(path, *cfg); err != nil {
 			return err
 		}
 	}
@@ -52,15 +59,9 @@ func validateTrackerAndRepo(path string, cfg Config) error {
 	return nil
 }
 
-// validateLinearProjectSlug enforces SPEC §11.2's single-project filter: a
-// Linear workflow must name the project to poll. Non-Linear trackers carry no
-// project_slug requirement.
-func validateLinearProjectSlug(path string, cfg Config) error {
-	if cfg.Tracker.Kind != "linear" {
-		return nil
-	}
-	if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" {
-		return fmt.Errorf("%s: tracker.project_slug is required when tracker.kind is linear", path)
+func validateSupportedTrackerKind(path string, cfg Config) error {
+	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
+		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, github, linear)", path, cfg.Tracker.Kind)
 	}
 	return nil
 }
@@ -69,12 +70,6 @@ func validateLinearProjectSlug(path string, cfg Config) error {
 // supported set, a negative pagination cap, and agent env-passthrough names
 // that the exposure policy denies.
 func validateSupportedValues(path string, cfg Config) error {
-	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
-		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, github, linear)", path, cfg.Tracker.Kind)
-	}
-	if cfg.Tracker.PaginationMaxPages < 0 {
-		return fmt.Errorf("%s: tracker.pagination_max_pages must be zero for the adapter default or greater than zero", path)
-	}
 	if _, ok := supportedAgentDefaults[cfg.Agent.Default]; !ok {
 		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex-app-server, claude)", path, cfg.Agent.Default)
 	}

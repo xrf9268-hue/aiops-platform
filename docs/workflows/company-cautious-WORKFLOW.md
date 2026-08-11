@@ -8,8 +8,9 @@ repo:
 tracker:
   kind: linear
   # Required for Linear: maps to SPEC §11.2 project.slugId filtering.
-  project_slug: your-linear-project-slug
-  api_key: $LINEAR_API_KEY
+  provider:
+    project_slug: your-linear-project-slug
+    api_key: $LINEAR_API_KEY
   active_states:
     - Todo
     - In Progress

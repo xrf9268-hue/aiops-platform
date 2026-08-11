@@ -6,7 +6,7 @@ repo:
   owner: your-gitea-user
   name: your-repo
   # Use an HTTP(S) basic-auth clone URL with a low-privilege bot token: the
-  # tracker api_key below never reaches the agent (env-passthrough deny
+  # tracker provider token below never reaches the agent (env-passthrough deny
   # list), so this remote credential is what the reviewer uses to fetch the
   # head branch and call the Gitea API (read comments, fetch the PR diff,
   # post the review-findings comment) — the same surface the maker uses to
@@ -18,10 +18,11 @@ repo:
 
 tracker:
   kind: gitea
-  endpoint: http://gitea.local
+  provider:
+    base_url: http://gitea.local
+    token: $GITEA_TOKEN
   # Worker-held token for polling and the gitea_issue_labels verdict proxy;
   # expanded from the worker's environment, never exposed to the agent.
-  api_key: $GITEA_TOKEN
   # The reviewer claims exactly the maker's handoff state.
   active_states:
     - Human Review

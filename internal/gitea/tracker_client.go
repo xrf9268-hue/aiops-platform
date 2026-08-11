@@ -2,11 +2,13 @@ package gitea
 
 import (
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	giteaprofile "github.com/xrf9268-hue/aiops-platform/internal/trackerprofile/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -39,13 +41,14 @@ type Issue struct {
 // intentionally exposes no label mutation methods; Gitea writes belong on the
 // agent-side dynamic tool surface per SPEC §1.
 type TrackerClient struct {
-	BaseURL string
-	Token   string
-	Owner   string
-	Repo    string
-	Config  workflow.TrackerConfig
-	HTTP    *http.Client
-	Logf    func(format string, args ...any)
+	BaseURL            string
+	Token              string
+	Owner              string
+	Repo               string
+	PaginationMaxPages int
+	Config             workflow.TrackerConfig
+	HTTP               *http.Client
+	Logf               func(format string, args ...any)
 	// RequestTimeout caps the wall-clock duration of a single Gitea tracker
 	// request. Zero falls back to defaultGiteaRequestTimeout.
 	RequestTimeout time.Duration
@@ -59,12 +62,23 @@ type TrackerClient struct {
 }
 
 func NewTrackerClient(cfg workflow.TrackerConfig, baseURL, owner, repo string) *TrackerClient {
+	profile, ok := cfg.ProviderProfile().(*giteaprofile.Profile)
+	if !ok {
+		profile, _ = giteaprofile.Parse(cfg.Provider, owner, repo, os.LookupEnv)
+	}
+	if profile == nil {
+		profile = &giteaprofile.Profile{BaseURL: giteaprofile.DefaultBaseURL, Owner: owner, Repo: repo, PaginationMaxPages: listIssuesMaxPages}
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = profile.BaseURL
+	}
 	return &TrackerClient{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Token:   cfg.APIKey,
-		Owner:   owner,
-		Repo:    repo,
-		Config:  cfg,
+		BaseURL:            strings.TrimRight(baseURL, "/"),
+		Token:              profile.Token,
+		Owner:              profile.Owner,
+		Repo:               profile.Repo,
+		PaginationMaxPages: profile.PaginationMaxPages,
+		Config:             cfg,
 	}
 }
 
@@ -95,8 +109,8 @@ func (c *TrackerClient) PaginationCapHits() int64 {
 }
 
 func (c *TrackerClient) IssueMaxPages() int {
-	if c != nil && c.Config.PaginationMaxPages > 0 {
-		return c.Config.PaginationMaxPages
+	if c != nil && c.PaginationMaxPages > 0 {
+		return c.PaginationMaxPages
 	}
 	return listIssuesMaxPages
 }

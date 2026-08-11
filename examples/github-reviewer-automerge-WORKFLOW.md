@@ -8,7 +8,7 @@ repo:
 
 tracker:
   kind: github
-  api_key: $GITHUB_TOKEN
+  provider: {token: $GITHUB_TOKEN}
   active_states:
     - aiops:human-review
   terminal_states:

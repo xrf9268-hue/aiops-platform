@@ -6,7 +6,10 @@ repo:
   clone_url: http://localhost:3000/aiops-bot/demo-scripted-agent.git
 tracker:
   kind: gitea
-  api_key: $AIOPS_TRACKER_SECRET
+  provider:
+    base_url: __GITEA_BASE_URL__
+    token: $AIOPS_TRACKER_SECRET
+    repo: __GITEA_REPO__
   active_states:
     - Todo
   terminal_states:

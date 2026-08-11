@@ -47,8 +47,11 @@ func opNameFromQuery(q string) string {
 
 func newTestClient(t *testing.T, srv *httptest.Server, cfg workflow.TrackerConfig) *LinearClient {
 	t.Helper()
-	if cfg.APIKey == "" {
-		cfg.APIKey = "test-key"
+	if cfg.Provider == nil {
+		cfg.Provider = map[string]any{}
+	}
+	if _, present := cfg.Provider["api_key"]; !present {
+		cfg.Provider["api_key"] = "test-key"
 	}
 	c := NewLinearClient(cfg)
 	c.BaseURL = srv.URL
@@ -107,7 +110,7 @@ func TestListIssuesByStatesRequiresProjectSlugAndUsesProjectFilter(t *testing.T)
 		t.Fatalf("ListIssuesByStates without project slug error = %v, want missing project slug", err)
 	}
 
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	if _, err := client.ListIssuesByStates(context.Background(), []string{"Todo"}); err != nil {
 		t.Fatalf("ListIssuesByStates with project slug: %v", err)
 	}
@@ -136,7 +139,7 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"branchName":"agent/lin-1","createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "api-platform"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
 	if err != nil {
@@ -190,7 +193,7 @@ func TestListIssuesByStatesUsesLinearSupportedQueryShape(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","labels":{"nodes":[]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "api-platform"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
 	if err != nil {
@@ -229,7 +232,7 @@ func TestListIssuesByStatesUsesDefaultPageSizeAndAggregatesMoreThanFiftyIssues(t
 		t.Fatalf("unexpected extra ListIssues request %d", idx+1)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
 	if err != nil {
@@ -276,7 +279,7 @@ func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[{"name":"Aiops-Ready"}]}},{"id":"issue-2","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2"})
 	if err != nil {
@@ -318,7 +321,7 @@ func TestFetchIssueStatesByIDsOutcomeCleanMissingIsAbsent(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2", "issue-1", " "})
 	if err != nil {
@@ -341,7 +344,7 @@ func TestFetchIssueStatesByIDsPartialGraphQLErrorLeavesChunkUnknown(t *testing.T
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"}}]}},"errors":[{"message":"partial"}]}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2"})
 	if !errors.Is(err, ErrLinearGraphQLErrors) {
@@ -377,7 +380,7 @@ func TestFetchIssueStatesByIDsPartialPayloadLeavesChunkUnknown(t *testing.T) {
 				_, _ = io.WriteString(w, tc.payload)
 			}))
 			defer httpSrv.Close()
-			client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+			client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 			states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2"})
 			if !errors.Is(err, ErrLinearUnknownPayload) || !errors.Is(err, ErrIssueStateRefreshIncomplete) {
@@ -396,7 +399,7 @@ func TestFetchIssueStatesByIDsExplicitEmptyNodesMeansAbsent(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[]}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
 	if err != nil {
@@ -419,7 +422,7 @@ func TestFetchIssueStatesByIDsIncompleteChunkPreservesLaterCurrent(t *testing.T)
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-51","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	ids := make([]string, linearIssuePageSize+1)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("issue-%d", i+1)
@@ -444,7 +447,7 @@ func TestFetchIssueStatesByIDsRateLimitStopsLaterChunks(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	ids := make([]string, linearIssuePageSize+1)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("issue-%d", i+1)
@@ -471,7 +474,7 @@ func TestFetchIssueStatesByIDsGraphQLRateLimitStopsLaterChunks(t *testing.T) {
 		_, _ = io.WriteString(w, `{"errors":[{"message":"rate limit exceeded","extensions":{"code":"RATELIMITED"}}]}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	ids := make([]string, linearIssuePageSize+1)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("issue-%d", i+1)
@@ -498,7 +501,7 @@ func TestFetchIssueStatesByIDsBadRequestProbeFailureStopsLaterChunks(t *testing.
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	ids := make([]string, linearIssuePageSize+1)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("issue-%d", i+1)
@@ -523,7 +526,7 @@ func TestFetchIssueStatesByIDsNonRateLimitBadRequestRemainsAPIStatus(t *testing.
 		_, _ = io.WriteString(w, `{"errors":[{"message":"bad request","extensions":{"code":"BAD_USER_INPUT"}}]}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	_, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
 	if !errors.Is(err, ErrLinearAPIStatus) || errors.Is(err, ErrRateLimited) {
@@ -543,7 +546,7 @@ func TestFetchIssueStatesByIDsPartialFailedChunkPreservesEarlierOutcomes(t *test
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	ids := make([]string, linearIssuePageSize+1)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("issue-%d", i+1)
@@ -602,7 +605,7 @@ func TestFetchIssueStatesByIDsChunksLargeBatches(t *testing.T) {
 		_, _ = io.WriteString(w, linearIssueStatesJSON(ids))
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	ids := make([]string, 0, linearIssuePageSize+5)
 	for i := 1; i <= linearIssuePageSize+5; i++ {
 		ids = append(ids, fmt.Sprintf("issue-%d", i))
@@ -720,7 +723,7 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 		_, _ = io.WriteString(w, pages[idx])
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo", "In Progress"})
 	if err != nil {
@@ -797,7 +800,7 @@ func TestListIssuesByStatesPaginatesLinearInverseRelationsBeforeMappingBlockers(
 		}
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -842,7 +845,7 @@ func TestListIssuesByStatesSurvivesBlockerResolutionFailure(t *testing.T) {
 			`],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo", "In Progress"})
 	if err != nil {
@@ -878,7 +881,7 @@ func TestListIssuesByStatesPropagatesCallerTimeoutDuringBlockerResolution(t *tes
 			`],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	client.RequestTimeout = time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -912,7 +915,7 @@ func TestListIssuesByStatesPropagatesRateLimitDuringBlockerResolution(t *testing
 			`],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if !errors.Is(err, ErrRateLimited) {
@@ -961,7 +964,7 @@ func TestListIssuesByStatesBatchesBlockerLookupsForManyTodoIssues(t *testing.T) 
 		}
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -1038,7 +1041,7 @@ func TestListIssuesByStatesChunksBlockerBatchAcrossPageSize(t *testing.T) {
 		}
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -1065,7 +1068,7 @@ func TestListIssuesByStatesErrorsWhenNextPageCursorMissing(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil || !strings.Contains(err.Error(), "linear pagination missing endCursor") {
@@ -1079,7 +1082,7 @@ func TestListIssuesByStatesErrorsWhenMaxPagesExceeded(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-cursor"}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if !errors.Is(err, ErrIssueListingCapped) {
@@ -1099,7 +1102,7 @@ func TestListIssuesByStatesUsesConfiguredPaginationMaxPages(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops", PaginationMaxPages: 1})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops", "pagination_max_pages": 1}})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if !errors.Is(err, ErrIssueListingCapped) {
@@ -1130,7 +1133,7 @@ func TestListIssuesByStatesFailsClosedWhenInverseRelationMaxPagesExceeded(t *tes
 		}
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -1164,7 +1167,7 @@ func TestListIssuesByStatesConfiguredInverseRelationPaginationCapFailsClosed(t *
 		}
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops", PaginationMaxPages: 1})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops", "pagination_max_pages": 1}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -1191,7 +1194,7 @@ func TestLinearClient_EnforcesRequestTimeout(t *testing.T) {
 		srv.Close()
 	})
 
-	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, srv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 	client.RequestTimeout = 50 * time.Millisecond
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
@@ -1204,25 +1207,23 @@ func TestLinearClient_EnforcesRequestTimeout(t *testing.T) {
 }
 
 func TestNewLinearClient_DefaultsRequestTimeoutTo30s(t *testing.T) {
-	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k"})
+	client := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "k"}})
 	if client.RequestTimeout != 30*time.Second {
 		t.Fatalf("default RequestTimeout = %v, want 30s", client.RequestTimeout)
 	}
 }
 
-// TestNewLinearClientHonorsCurrentEndpointOverride pins the current flat
-// `tracker.endpoint` wiring. D43 / #1144 owns its atomic replacement with
-// adapter-owned `tracker.provider`; the existing behavior remains required
-// until that cutover.
+// TestNewLinearClientHonorsCurrentEndpointOverride pins adapter-owned endpoint
+// wiring through tracker.provider.
 func TestNewLinearClientHonorsCurrentEndpointOverride(t *testing.T) {
-	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k", Endpoint: "https://linear.example/graphql"})
+	client := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "k", "endpoint": "https://linear.example/graphql"}})
 	if client.BaseURL != "https://linear.example/graphql" {
-		t.Fatalf("BaseURL = %q, want override from tracker.endpoint", client.BaseURL)
+		t.Fatalf("BaseURL = %q, want override from tracker.provider.endpoint", client.BaseURL)
 	}
 }
 
 func TestNewLinearClientDefaultsToLinearEndpoint(t *testing.T) {
-	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k"})
+	client := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "k"}})
 	if client.BaseURL != DefaultLinearEndpoint {
 		t.Fatalf("BaseURL = %q, want DefaultLinearEndpoint when override absent", client.BaseURL)
 	}
@@ -1242,7 +1243,7 @@ func TestNewLinearClientEndpointActuallyUsedForRequests(t *testing.T) {
 	defer srv.Close()
 
 	endpoint := srv.URL + "/custom-graphql"
-	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k", ProjectSlug: "aiops", Endpoint: endpoint, ActiveStates: []string{"Todo"}})
+	client := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "k", "project_slug": "aiops", "endpoint": endpoint}, ActiveStates: []string{"Todo"}})
 	client.HTTP = srv.Client()
 	if _, err := client.ListIssuesByStates(context.Background(), []string{"Todo"}); err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
@@ -1261,7 +1262,7 @@ func TestListIssuesByStatesEmptyShortCircuitsWithoutAPICall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, srv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	cases := []struct {
 		name   string
@@ -1312,7 +1313,7 @@ func TestListIssuesByStatesSkipsBlockerFetchForNonTodoIssue(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer srv.Close()
-	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, srv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
 	if err != nil {
@@ -1348,7 +1349,7 @@ func TestListIssuesByStatesSkipsBlankLabelNames(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","labels":{"nodes":[{"name":"  "},{"name":""},{"name":" Backend "}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer srv.Close()
-	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, srv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
 	if err != nil {
@@ -1386,7 +1387,7 @@ func TestListIssuesByStatesReturnsParseErrorForMalformedTimestamp(t *testing.T) 
 				_, _ = io.WriteString(w, fmt.Sprintf(`{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":%q,"updatedAt":%q,"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`, c.createdAt, c.updatedAt))
 			}))
 			defer srv.Close()
-			client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+			client := newTestClient(t, srv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 			issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
 			if err == nil {
@@ -1422,7 +1423,7 @@ func TestFetchIssueStatesByIDsSurvivesBlockerResolutionFailure(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[{"name":"Ready"}]}}]}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
 	if err != nil {
@@ -1452,7 +1453,7 @@ func TestFetchIssueStatesByIDsFailsClosedOnIncompleteBlockerPayload(t *testing.T
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[]}}]}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}})
 
 	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
 	if err != nil {

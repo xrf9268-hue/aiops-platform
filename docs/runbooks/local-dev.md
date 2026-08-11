@@ -38,7 +38,7 @@ needs Postgres, it is stale — file an issue.
 - `git` and `curl`.
 - Tracker credentials matching the workflow you're running:
   - `tracker.kind: linear` → a Linear personal API key.
-  - `tracker.kind: gitea` → a Gitea base URL in `tracker.endpoint`
+  - `tracker.kind: gitea` → a Gitea base URL in `tracker.provider.base_url`
     and a bot token.
   - `tracker.kind: github` → a GitHub token (`gh auth token` works).
 - A scratch workspace root. `workspace.root` in `WORKFLOW.md` is the
@@ -99,17 +99,15 @@ without calling any external model.
 
 ## 2. Run the worker
 
-The worker does **not** read `LINEAR_API_KEY` / `GITEA_TOKEN` /
-`GITHUB_TOKEN` directly — those env vars only affect the worker when
-`tracker.api_key` in your selected `WORKFLOW.md` references them via
-`$VAR` syntax. Before running the worker, make sure the workflow file
-has the right `tracker.api_key` mapping for your `tracker.kind`:
+Each selected adapter reads its credential from `tracker.provider`; whole-value
+`$VAR` references resolve at workflow load. Before running the worker, make
+sure the workflow has the right provider key for its `tracker.kind`:
 
-| `tracker.kind` | `tracker.api_key` line in `WORKFLOW.md` |
+| `tracker.kind` | Provider line in `WORKFLOW.md` |
 | --- | --- |
-| `linear` | `api_key: $LINEAR_API_KEY` |
-| `gitea`  | `api_key: $GITEA_TOKEN` |
-| `github` | `api_key: $GITHUB_TOKEN` |
+| `linear` | `tracker.provider.api_key: $LINEAR_API_KEY` |
+| `gitea`  | `tracker.provider.token: $GITEA_TOKEN` |
+| `github` | `tracker.provider.token: $GITHUB_TOKEN` |
 
 The shipped examples — `examples/WORKFLOW.md`,
 `examples/gitea-WORKFLOW.md`, and `examples/github-local-WORKFLOW.md` —
@@ -121,17 +119,16 @@ Option A: from source.
 export AIOPS_WORKFLOW_PATH=$PWD/.aiops/WORKFLOW.md
 export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
-# For tracker.kind: linear  (consumed by WORKFLOW.md "api_key: $LINEAR_API_KEY")
+# For tracker.kind: linear  (tracker.provider.api_key)
 export LINEAR_API_KEY=your-linear-personal-key
 
 # For tracker.kind: gitea
-# Prefer tracker.endpoint in WORKFLOW.md. GITEA_BASE_URL is only a runtime
-# base-URL fallback when tracker.endpoint is empty; GITEA_TOKEN must be wired
-# through "api_key: $GITEA_TOKEN" in WORKFLOW.md to actually authenticate.
+# Prefer tracker.provider.base_url. GITEA_BASE_URL is the adapter fallback when
+# that key is omitted; tracker.provider.token must reference GITEA_TOKEN.
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
 
-# For tracker.kind: github  (consumed via WORKFLOW.md "api_key: $GITHUB_TOKEN")
+# For tracker.kind: github  (tracker.provider.token)
 export GITHUB_TOKEN=$(gh auth token -h github.com)
 
 go run ./cmd/worker
@@ -239,9 +236,9 @@ default config (with `source: default`) instead of failing, so always
 check the `resolution.source` and `resolution.path` fields against the
 file you expected.
 
-Secret-bearing fields (`tracker.api_key`, `repo.clone_url` userinfo,
-`sandbox.credential_files`) are masked with `***` so the output is
-safe to paste into chat or issues.
+Adapter-declared `tracker.provider` secrets, `repo.clone_url` userinfo, and
+`sandbox.credential_files` are masked with `***`. Non-secret provider endpoint,
+scope, and unknown keys remain observable.
 
 Once the worker is running, inspect live runtime state via the
 loopback-only HTTP server:
@@ -280,8 +277,8 @@ tool surface, not the worker. Default state labels:
 
 Gitea issue listing is capped at 20 pages of 50 issues per state label by
 default (1000 issues). Override the page budget with
-`tracker.pagination_max_pages` when a repository legitimately needs more. The
-same label mapping is used for per-tick reconciliation: after a run starts,
+`tracker.provider.pagination_max_pages` when a repository legitimately needs
+more. The same label mapping is used for per-tick reconciliation: after a run starts,
 moving the issue to `aiops/done` or `aiops/canceled` makes the next worker poll
 refresh that issue by ID and cancel the active run.
 
@@ -306,39 +303,26 @@ workflow: AIOPS_WORKFLOW_PATH refers to /…/WORKFLOW.md which does not exist
 
 ### Missing tracker credentials
 
-All tracker tokens flow through `tracker.api_key` in `WORKFLOW.md`,
-regardless of `tracker.kind`. The worker does **not** read
-`LINEAR_API_KEY` / `GITEA_TOKEN` / `GITHUB_TOKEN` directly at poll
-time — the canonical pattern is to set `tracker.api_key: $VAR` in
-the workflow and let the loader expand `$VAR` at startup. Only the
-tracker's base URL has any direct env fallback (`GITEA_BASE_URL` /
-`GITHUB_API_BASE_URL`, applied at runtime when the corresponding
-config field is empty).
+Credentials are adapter-owned provider keys: Linear uses `api_key`; Gitea and
+GitHub use `token`. A whole-value `$VAR` / `${VAR}` reference resolves during
+workflow admission. Gitea and GitHub also retain base-URL fallbacks when their
+provider URL key is omitted.
 
 | `tracker.kind` | `WORKFLOW.md` token reference | Base-URL env fallback |
 | --- | --- | --- |
-| `linear` | `tracker.api_key: $LINEAR_API_KEY` (or any `$VAR`) | n/a |
-| `gitea`  | `tracker.api_key: $GITEA_TOKEN`  (or any `$VAR`) | `GITEA_BASE_URL` when `tracker.endpoint` is empty |
-| `github` | `tracker.api_key: $GITHUB_TOKEN` (or any `$VAR`) | `GITHUB_API_BASE_URL` when `tracker.endpoint` is empty |
+| `linear` | `tracker.provider.api_key: $LINEAR_API_KEY` | n/a |
+| `gitea`  | `tracker.provider.token: $GITEA_TOKEN` | `GITEA_BASE_URL` when `provider.base_url` is omitted |
+| `github` | `tracker.provider.token: $GITHUB_TOKEN` | `GITHUB_API_BASE_URL` when `provider.api_url` is omitted |
 
-When the failure surfaces depends on how `tracker.api_key` is encoded
-in `WORKFLOW.md`:
+When the selected adapter admits its provider profile:
 
-- If `tracker.api_key` is an explicit env reference (`$VAR` or
-  `${VAR}`) and the env var is unset or empty, workflow loading fails
-  at startup with `missing_tracker_api_key` before the first poll.
-  This is the loud, fail-fast path — fix the env var and retry.
-- If `tracker.api_key` is empty (or missing entirely), startup
-  succeeds with no warning and the first tracker poll fails (e.g. the
-  Gitea client errors with `GITEA_BASE_URL and Gitea tracker api_key
-  are required`). Check the worker log for the first poll cycle, not
-  just the startup line.
-- A non-empty literal value (e.g. `tracker.api_key: ghp_…`) is passed
-  through unchanged and used as the token — that is a valid
-  configuration, just not the recommended one because the secret then
-  sits in `WORKFLOW.md` rather than the environment. Operators who
-  paste a raw token here are not hitting a loader bug; they are
-  bypassing the env-expansion path.
+- A missing, unset, or empty secret fails startup with
+  `missing_tracker_secret` and names the provider field and referenced env var
+  without printing its value.
+- A literal non-empty secret is accepted but is discouraged because it sits in
+  `WORKFLOW.md`; prefer the whole-value environment reference.
+- Unknown provider keys remain unchanged, including strings that look like
+  `$VAR`; only keys documented by the selected adapter are interpreted.
 
 ### `/api/v1/state` returns nothing or refuses to bind
 

@@ -281,7 +281,7 @@ for line in sys.stdin:
 func TestBuildThreadStartParamsPreservesInheritedCodexAppConfig(t *testing.T) {
 	in := appServerInput(codexWorkdir(t, "preserve app config"))
 	in.Workflow.Config.Tracker.Kind = "linear"
-	in.Workflow.Config.Tracker.APIKey = "linear-secret"
+	in.Workflow.Config.Tracker.Provider = map[string]any{"api_key": "linear-secret", "project_slug": "platform"}
 	payload := buildThreadStartParams(in, in.Workflow.Config.Codex.ApprovalPolicy)
 
 	if _, ok := payload["config"]; ok {
@@ -295,7 +295,7 @@ func TestBuildThreadStartParamsPreservesInheritedCodexAppConfig(t *testing.T) {
 func TestBuildThreadStartParamsOmitsDeprecatedMultiAgentModeWithoutSuppressingDynamicTools(t *testing.T) {
 	in := appServerInput(codexWorkdir(t, "omit deprecated multi-agent mode"))
 	in.Workflow.Config.Tracker.Kind = "linear"
-	in.Workflow.Config.Tracker.APIKey = "linear-secret"
+	in.Workflow.Config.Tracker.Provider = map[string]any{"api_key": "linear-secret", "project_slug": "platform"}
 	payload := buildThreadStartParams(in, in.Workflow.Config.Codex.ApprovalPolicy)
 
 	if got, ok := payload["multiAgentMode"]; ok {
@@ -1166,7 +1166,7 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	in.Workflow.Config.Tracker = workflow.TrackerConfig{Kind: "linear", APIKey: secret}
+	in.Workflow.Config.Tracker = workflow.TrackerConfig{Provider: map[string]any{"api_key": secret}, Kind: "linear"}
 
 	_, err := (CodexAppServerRunner{}).Run(context.Background(), in)
 	if err != nil {
@@ -1217,7 +1217,7 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	in.Workflow.Config.Tracker = workflow.TrackerConfig{Kind: "linear", APIKey: secret, Endpoint: linearServer.URL}
+	in.Workflow.Config.Tracker = workflow.TrackerConfig{Provider: map[string]any{"api_key": secret, "endpoint": linearServer.URL}, Kind: "linear"}
 	in.Workflow.Config.Codex.LinearGraphQL = workflow.LinearGraphQLConfig{AllowMutations: true}
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
@@ -2573,8 +2573,7 @@ for line in sys.stdin:
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
 	in.Workflow.Config.Codex.StallTimeoutMs = 1000
 	in.Workflow.Config.Tracker.Kind = "gitea"
-	in.Workflow.Config.Tracker.APIKey = "token"
-	in.Workflow.Config.Tracker.Endpoint = "http://127.0.0.1:1"
+	in.Workflow.Config.Tracker.Provider = map[string]any{"api_key": "token", "project_slug": "platform", "endpoint": "http://127.0.0.1:1"}
 	in.Workflow.Config.Repo.Owner = "o"
 	in.Workflow.Config.Repo.Name = "r"
 	// Hang-guard only; the assertion is that the dynamic tool call + its output

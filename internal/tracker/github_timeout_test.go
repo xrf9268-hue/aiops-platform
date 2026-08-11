@@ -34,10 +34,7 @@ func TestGitHubClientListIssuesAbortsHungServer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:       "stub-token",
-		ActiveStates: []string{"open"},
-	}, srv.URL, "owner", "repo")
+	c := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "stub-token"}, ActiveStates: []string{"open"}}, srv.URL, "owner", "repo")
 	c.HTTP = srv.Client()
 	c.RequestTimeout = 200 * time.Millisecond
 

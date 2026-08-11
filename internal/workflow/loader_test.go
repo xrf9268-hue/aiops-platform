@@ -15,15 +15,17 @@ repo:
   clone_url: https://github.com/xrf9268-hue/aiops-platform.git
 tracker:
   kind: linear
+  provider:
+    api_key: test-linear-token
 ---
 Prompt body
 `)
 
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("Load(linear without tracker.project_slug) = nil, want validation error")
+		t.Fatal("Load(linear without tracker.provider.project_slug) = nil, want validation error")
 	}
-	for _, want := range []string{path, "tracker.project_slug", "required", "tracker.kind is linear"} {
+	for _, want := range []string{path, "tracker.provider.project_slug", "required", "tracker.kind is linear"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Load error = %q, want substring %q", err, want)
 		}
@@ -46,6 +48,9 @@ hooks:
   timeout_ms: -1
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `,
@@ -61,6 +66,9 @@ hooks:
   timeout_ms: 0
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `,
@@ -102,7 +110,7 @@ tracker:
 ---
 prompt body
 `,
-			want: []string{"tracker.base_url", "tracker.endpoint"},
+			want: []string{"tracker.base_url", "tracker.provider"},
 		},
 		{
 			name: "base_url even when endpoint is set",
@@ -118,7 +126,7 @@ tracker:
 ---
 prompt body
 `,
-			want: []string{"tracker.base_url", "tracker.endpoint"},
+			want: []string{"tracker.endpoint", "tracker.provider"},
 		},
 		{
 			name: "gitea project_slug base URL",
@@ -133,7 +141,7 @@ tracker:
 ---
 prompt body
 `,
-			want: []string{"tracker.project_slug", "tracker.endpoint", "Gitea"},
+			want: []string{"tracker.project_slug", "tracker.provider"},
 		},
 	}
 
@@ -171,8 +179,9 @@ repo:
   clone_url: $AIOPS_TEST_REPO_URL
 tracker:
   kind: gitea
-  api_key: ${AIOPS_TEST_TRACKER_KEY}
-  endpoint: $AIOPS_TEST_TRACKER_BASE_URL
+  provider:
+    token: ${AIOPS_TEST_TRACKER_KEY}
+    base_url: $AIOPS_TEST_TRACKER_BASE_URL
 workspace:
   root: $AIOPS_TEST_WORKSPACE_ROOT
 codex:
@@ -193,11 +202,11 @@ Prompt body
 	if got := wf.Config.Repo.CloneURL; got != "git@example.com:o/r.git" {
 		t.Fatalf("repo.clone_url = %q", got)
 	}
-	if got := wf.Config.Tracker.APIKey; got != "tracker-secret" {
-		t.Fatalf("tracker.api_key = %q", got)
+	if got := wf.Config.Tracker.Provider["token"]; got != "tracker-secret" {
+		t.Fatalf("tracker.provider.token = %q", got)
 	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/api" {
-		t.Fatalf("tracker.endpoint = %q", got)
+	if got := wf.Config.Tracker.Provider["base_url"]; got != "https://tracker.example/api" {
+		t.Fatalf("tracker.provider.base_url = %q", got)
 	}
 	if got := wf.Config.Workspace.Root; got != workspaceRoot {
 		t.Fatalf("workspace.root = %q, want %q", got, workspaceRoot)
@@ -224,7 +233,9 @@ repo:
   clone_url: https://gitea.example/$USER/aiops
 tracker:
   kind: gitea
-  endpoint: https://tracker.example/$USER/api
+  provider:
+    token: test-gitea-token
+    base_url: https://tracker.example/$USER/api
 workspace:
   root: .aiops-$USER
 codex:
@@ -248,8 +259,8 @@ Prompt body
 	if got := wf.Config.Repo.CloneURL; got != "https://gitea.example/$USER/aiops" {
 		t.Fatalf("repo.clone_url = %q", got)
 	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/$USER/api" {
-		t.Fatalf("tracker.endpoint = %q", got)
+	if got := wf.Config.Tracker.Provider["base_url"]; got != "https://tracker.example/$USER/api" {
+		t.Fatalf("tracker.provider.base_url = %q", got)
 	}
 	wantRoot := filepath.Join(dir, ".aiops-$USER")
 	if got := wf.Config.Workspace.Root; got != wantRoot {
@@ -275,7 +286,8 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: gitea
-  api_key: $AIOPS_TEST_EMPTY_TRACKER_KEY
+  provider:
+    token: $AIOPS_TEST_EMPTY_TRACKER_KEY
 ---
 Prompt body
 `)
@@ -284,7 +296,7 @@ Prompt body
 	if err == nil {
 		t.Fatal("Load = nil, want missing env reference error")
 	}
-	for _, want := range []string{path, "missing_tracker_api_key", "tracker.api_key", "$AIOPS_TEST_EMPTY_TRACKER_KEY"} {
+	for _, want := range []string{path, "missing_tracker_secret", "tracker.provider.token", "$AIOPS_TEST_EMPTY_TRACKER_KEY"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Load error = %q, want substring %q", err, want)
 		}
@@ -302,7 +314,8 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: gitea
-  api_key: literal-key
+  provider:
+    token: literal-key
 codex:
   command: $AIOPS_TEST_UNSET_CODEX_COMMAND
 ---
@@ -314,7 +327,7 @@ Prompt body
 		t.Fatal("Load = nil, want missing env reference error for codex.command")
 	}
 	if strings.Contains(err.Error(), "missing_tracker_api_key") {
-		t.Fatalf("Load error = %q, codex.command must not use tracker.api_key category", err)
+		t.Fatalf("Load error = %q, codex.command must not use tracker secret category", err)
 	}
 	for _, want := range []string{path, "workflow_config_missing_value", "codex.command", "$AIOPS_TEST_UNSET_CODEX_COMMAND"} {
 		if !strings.Contains(err.Error(), want) {
@@ -335,8 +348,9 @@ repo:
   clone_url: $aiops_test_repo_url
 tracker:
   kind: gitea
-  api_key: ${linear_token}
-  endpoint: $Mixed_Case_Url
+  provider:
+    token: ${linear_token}
+    base_url: $Mixed_Case_Url
 ---
 Prompt body
 `)
@@ -348,11 +362,11 @@ Prompt body
 	if got := wf.Config.Repo.CloneURL; got != "git@example.com:o/lower.git" {
 		t.Fatalf("repo.clone_url = %q, lowercase env not resolved", got)
 	}
-	if got := wf.Config.Tracker.APIKey; got != "linear-secret" {
-		t.Fatalf("tracker.api_key = %q, lowercase ${} env not resolved", got)
+	if got := wf.Config.Tracker.Provider["token"]; got != "linear-secret" {
+		t.Fatalf("tracker.provider.token = %q, lowercase ${} env not resolved", got)
 	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/mixed" {
-		t.Fatalf("tracker.endpoint = %q, mixed-case env not resolved", got)
+	if got := wf.Config.Tracker.Provider["base_url"]; got != "https://tracker.example/mixed" {
+		t.Fatalf("tracker.provider.base_url = %q, mixed-case env not resolved", got)
 	}
 }
 
@@ -528,8 +542,9 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: linear
-  project_slug: example
-  api_key: $LINEAR_API_KEY_BLOCK_SCALAR_TEST
+  provider:
+    project_slug: example
+    api_key: $LINEAR_API_KEY_BLOCK_SCALAR_TEST
 agent:
   default: codex-app-server
 ---
@@ -543,8 +558,8 @@ Prompt body across the inner --- line.
 	if got := wf.Config.Agent.Default; got != "codex-app-server" {
 		t.Fatalf("agent.default = %q, want %q (front matter was truncated by inner --- line)", got, "codex-app-server")
 	}
-	if got := wf.Config.Tracker.APIKey; got != "linear-secret" {
-		t.Fatalf("tracker.api_key = %q, want %q", got, "linear-secret")
+	if got := wf.Config.Tracker.Provider["api_key"]; got != "linear-secret" {
+		t.Fatalf("tracker.provider.api_key = %q, want %q", got, "linear-secret")
 	}
 	if !strings.Contains(wf.PromptTemplate, "Prompt body across the inner --- line.") {
 		t.Fatalf("prompt template missing expected body: %q", wf.PromptTemplate)
@@ -565,6 +580,9 @@ codex:
       - commentCreate
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -592,6 +610,9 @@ codex:
       - issueUpdate
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -630,6 +651,9 @@ codex:
       - `+tt.entry+`
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -659,6 +683,9 @@ codex:
       - issueUpdate
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -684,6 +711,9 @@ claude:
     allow_mutations: true
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ---
 Prompt body
 `)
@@ -714,7 +744,9 @@ server:
   port: 5000
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 ---
 Prompt body
 `)
@@ -740,7 +772,9 @@ server:
   host: 127.0.0.1
 tracker:
   kind: linear
-  project_slug: platform
+  provider:
+    api_key: test-linear-token
+    project_slug: platform
 ---
 Prompt body
 `)

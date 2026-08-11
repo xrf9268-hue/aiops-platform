@@ -253,13 +253,11 @@ const maskedSecret = "***"
 // secret-bearing field to the schema without extending this function is
 // a review-blocking gap — tests in print_config_test.go pin each known
 // field against plaintext leaks. Current coverage:
-//   - Tracker.APIKey            (token)
+//   - Tracker.Provider          (adapter-declared secret keys only)
 //   - Repo.CloneURL             (may embed https://user:token@... userinfo)
 //   - Sandbox.CredentialFiles   (each path is itself an attacker pointer)
 func maskSecrets(cfg workflow.Config) workflow.Config {
-	if cfg.Tracker.APIKey != "" {
-		cfg.Tracker.APIKey = maskedSecret
-	}
+	cfg.Tracker.Provider = cfg.Tracker.MaskedProvider(maskedSecret)
 	cfg.Repo.CloneURL = workflow.MaskCloneURL(cfg.Repo.CloneURL)
 	if n := len(cfg.Sandbox.CredentialFiles); n > 0 {
 		masked := make([]string, n)

@@ -35,9 +35,7 @@ func TestGiteaTrackerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T)
 		t.Fatalf("add label: %v", err)
 	}
 
-	client := gitea.NewTrackerClient(workflow.TrackerConfig{
-		APIKey:         bed.gitea.botToken,
-		ActiveStates:   []string{"Todo", "Rework"},
+	client := gitea.NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": bed.gitea.botToken}, ActiveStates: []string{"Todo", "Rework"},
 		TerminalStates: []string{"Done", "Canceled"},
 	}, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
@@ -107,9 +105,7 @@ func TestGiteaTrackerIgnoresBacklogAndTerminalIssues(t *testing.T) {
 		t.Fatalf("label terminal issue: %v", err)
 	}
 
-	client := gitea.NewTrackerClient(workflow.TrackerConfig{
-		APIKey:         bed.gitea.botToken,
-		ActiveStates:   []string{"Todo", "Rework"},
+	client := gitea.NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": bed.gitea.botToken}, ActiveStates: []string{"Todo", "Rework"},
 		TerminalStates: []string{"Done", "Canceled"},
 	}, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()

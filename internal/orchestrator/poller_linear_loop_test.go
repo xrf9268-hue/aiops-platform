@@ -91,10 +91,7 @@ func linearBlockerNode(issueID, blockerID, blockerState string) any {
 
 func newLinearLoopClient(t *testing.T, srv *httptest.Server) *tracker.LinearClient {
 	t.Helper()
-	client := tracker.NewLinearClient(workflow.TrackerConfig{
-		APIKey:         "test-key",
-		ProjectSlug:    "aiops-loop",
-		ActiveStates:   []string{"Todo", "In Progress"},
+	client := tracker.NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "test-key", "project_slug": "aiops-loop"}, ActiveStates: []string{"Todo", "In Progress"},
 		TerminalStates: []string{"Done", "Canceled"},
 	})
 	client.BaseURL = srv.URL

@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	giteaprofile "github.com/xrf9268-hue/aiops-platform/internal/trackerprofile/gitea"
+	linearprofile "github.com/xrf9268-hue/aiops-platform/internal/trackerprofile/linear"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -103,15 +106,16 @@ func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOpt
 	}
 	tools := DynamicToolSet{tools: map[string]DynamicTool{}}
 	trackerCfg := wf.Config.Tracker
-	if strings.EqualFold(trackerCfg.Kind, "linear") && trackerCfg.APIKey != "" {
+	linearCfg := linearToolProfile(trackerCfg)
+	if strings.EqualFold(trackerCfg.Kind, "linear") && linearCfg != nil && linearCfg.APIKey != "" {
 		client := linearGraphQLProxy{
-			apiKey:           trackerCfg.APIKey,
-			baseURL:          linearGraphQLEndpointFromConfig(trackerCfg),
+			apiKey:           linearCfg.APIKey,
+			baseURL:          linearCfg.Endpoint,
 			http:             http.DefaultClient,
 			allowMutations:   wf.Config.Codex.LinearGraphQL.AllowMutations,
 			allowedMutations: linearGraphQLAllowSet(wf.Config.Codex.LinearGraphQL.AllowedMutations),
 		}
-		if guard, ok := currentIssueGuardFromOptions(opts, trackerCfg); ok {
+		if guard, ok := currentIssueGuardFromOptions(opts, trackerCfg, linearCfg.TeamKey); ok {
 			client.currentIssueGuard = guard
 		}
 		tools.tools["linear_graphql"] = DynamicTool{
@@ -133,13 +137,13 @@ func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOpt
 		}
 		tools.tools["linear_ai_workpad"] = NewLinearWorkpadTool(harnessTool)
 	}
-	giteaBaseURL := giteaBaseURLFromTracker(trackerCfg)
-	if strings.EqualFold(trackerCfg.Kind, "gitea") && trackerCfg.APIKey != "" && wf.Config.Repo.Owner != "" && wf.Config.Repo.Name != "" && giteaBaseURL != "" {
+	giteaCfg := giteaToolProfile(trackerCfg, wf.Config.Repo.Owner, wf.Config.Repo.Name)
+	if strings.EqualFold(trackerCfg.Kind, "gitea") && giteaCfg != nil && giteaCfg.Token != "" && giteaCfg.Owner != "" && giteaCfg.Repo != "" && giteaCfg.BaseURL != "" {
 		client := giteaIssueLabelsProxy{
-			token:   trackerCfg.APIKey,
-			baseURL: giteaBaseURL,
-			owner:   wf.Config.Repo.Owner,
-			repo:    wf.Config.Repo.Name,
+			token:   giteaCfg.Token,
+			baseURL: giteaCfg.BaseURL,
+			owner:   giteaCfg.Owner,
+			repo:    giteaCfg.Repo,
 			http:    http.DefaultClient,
 		}.withCurrentIssueClassification(trackerCfg, opts)
 		tools.tools["gitea_issue_labels"] = DynamicTool{
@@ -152,7 +156,7 @@ func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOpt
 	return tools
 }
 
-func currentIssueGuardFromOptions(opts dynamicToolOptions, cfg workflow.TrackerConfig) (currentIssueMutationGuard, bool) {
+func currentIssueGuardFromOptions(opts dynamicToolOptions, cfg workflow.TrackerConfig, teamKey string) (currentIssueMutationGuard, bool) {
 	if opts.currentIssueID == "" || (opts.currentIssueRefresher == nil && opts.currentIssueOperatorStopLookup == nil) {
 		return currentIssueMutationGuard{}, false
 	}
@@ -161,12 +165,35 @@ func currentIssueGuardFromOptions(opts dynamicToolOptions, cfg workflow.TrackerC
 		issueIdentifier:            opts.currentIssueIdentifier,
 		activeStates:               append([]string(nil), cfg.ActiveStates...),
 		terminalStates:             append([]string(nil), cfg.TerminalStates...),
-		teamKey:                    cfg.TeamKey,
+		teamKey:                    teamKey,
 		refresh:                    opts.currentIssueRefresher,
 		operatorTerminalStopLookup: opts.currentIssueOperatorStopLookup,
 		activeCache:                &workflowStateIDCache{},
 		terminalCache:              &workflowStateIDCache{},
 	}, true
+}
+
+func linearToolProfile(cfg workflow.TrackerConfig) *linearprofile.Profile {
+	if profile, ok := cfg.ProviderProfile().(*linearprofile.Profile); ok {
+		return profile
+	}
+	profile, _ := linearprofile.Parse(cfg.Provider, os.LookupEnv)
+	return profile
+}
+
+func giteaToolProfile(cfg workflow.TrackerConfig, owner, repo string) *giteaprofile.Profile {
+	profile, ok := cfg.ProviderProfile().(*giteaprofile.Profile)
+	if !ok {
+		profile, _ = giteaprofile.Parse(cfg.Provider, owner, repo, os.LookupEnv)
+	}
+	if profile != nil {
+		if !profile.BaseURLConfigured {
+			copy := *profile
+			copy.BaseURL = ""
+			profile = &copy
+		}
+	}
+	return profile
 }
 
 func linearGraphQLInputSchema() map[string]any {

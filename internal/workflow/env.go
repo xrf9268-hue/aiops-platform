@@ -12,11 +12,7 @@ type MissingEnvValueError struct {
 }
 
 func (e *MissingEnvValueError) Error() string {
-	category := "workflow_config_missing_value"
-	if e.Field == "tracker.api_key" {
-		category = "missing_tracker_api_key"
-	}
-	return fmt.Sprintf("%s: %s references $%s but the environment variable is unset or empty", category, e.Field, e.EnvVar)
+	return fmt.Sprintf("workflow_config_missing_value: %s references $%s but the environment variable is unset or empty", e.Field, e.EnvVar)
 }
 
 func resolveExplicitEnv(field, value string) (string, error) {

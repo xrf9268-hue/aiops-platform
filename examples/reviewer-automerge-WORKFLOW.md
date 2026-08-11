@@ -15,8 +15,9 @@ repo:
 
 tracker:
   kind: gitea
-  endpoint: http://gitea.local
-  api_key: $GITEA_TOKEN          # worker-held; powers polling + gitea_issue_labels verdict proxy
+  provider:
+    base_url: http://gitea.local
+    token: $GITEA_TOKEN          # worker-held; powers polling + gitea_issue_labels verdict proxy
   active_states:
     - Human Review               # the reviewer claims exactly the maker's handoff state
   terminal_states:

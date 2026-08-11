@@ -18,7 +18,8 @@ Group=aiops
 
 # Tracker token(s) and any path overrides live here, mode 0600, owned by
 # aiops. The worker reads a tracker token only via WORKFLOW.md
-# `tracker.api_key: $VAR`, so the referenced $VAR must be present here.
+# a selected adapter's `tracker.provider` secret, so the referenced $VAR must
+# be present here.
 EnvironmentFile=/etc/aiops-platform/worker.env
 
 # HOME is the state dir, not a path under /home, so ProtectHome=true below

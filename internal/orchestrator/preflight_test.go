@@ -14,7 +14,7 @@ import (
 
 func TestValidateDispatchPreflight_HappyPathReturnsNil(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "lin_xxxx", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
 	if err := validateDispatchPreflight(cfg); err != nil {
@@ -22,23 +22,19 @@ func TestValidateDispatchPreflight_HappyPathReturnsNil(t *testing.T) {
 	}
 }
 
-func TestValidateDispatchPreflight_EmptyAPIKeyAfterVarResolution(t *testing.T) {
+func TestValidateDispatchPreflight_DoesNotRepeatAdapterSecretValidation(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
-	err := validateDispatchPreflight(cfg)
-	if err == nil {
-		t.Fatalf("expected error for empty api_key")
-	}
-	if !strings.Contains(err.Error(), "tracker.api_key empty") {
-		t.Errorf("unexpected reason: %v", err)
+	if err := validateDispatchPreflight(cfg); err != nil {
+		t.Fatalf("adapter semantics belong to load-time profile admission, got %v", err)
 	}
 }
 
 func TestValidateDispatchPreflight_MissingCodexCommand(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "lin_xxxx", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: ""},
 	}
 	err := validateDispatchPreflight(cfg)
@@ -52,7 +48,7 @@ func TestValidateDispatchPreflight_MissingCodexCommand(t *testing.T) {
 
 func TestValidateDispatchPreflight_UnsupportedTrackerKind(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "jira", APIKey: "x", ProjectSlug: "p"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": "x", "project_slug": "p"}, Kind: "jira"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
 	err := validateDispatchPreflight(cfg)
@@ -64,30 +60,26 @@ func TestValidateDispatchPreflight_UnsupportedTrackerKind(t *testing.T) {
 	}
 }
 
-func TestValidateDispatchPreflight_LinearProjectSlugMissingFails(t *testing.T) {
+func TestValidateDispatchPreflight_DoesNotRepeatAdapterScopeValidation(t *testing.T) {
 	missing := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "lin_xxxx"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
-	err := validateDispatchPreflight(missing)
-	if err == nil {
-		t.Fatalf("expected error for missing linear project_slug")
-	}
-	if !strings.Contains(err.Error(), "tracker.project_slug required for linear") {
-		t.Errorf("unexpected reason: %v", err)
+	if err := validateDispatchPreflight(missing); err != nil {
+		t.Fatalf("adapter semantics belong to load-time profile admission, got %v", err)
 	}
 }
 
 func TestValidateDispatchPreflight_JoinsMultipleReasons(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "", APIKey: ""},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": ""}, Kind: ""},
 		Codex:   workflow.CommandConfig{Command: ""},
 	}
 	err := validateDispatchPreflight(cfg)
 	if err == nil {
 		t.Fatalf("expected joined error")
 	}
-	for _, want := range []string{"tracker.kind missing", "tracker.api_key empty", "codex.command empty"} {
+	for _, want := range []string{"tracker.kind missing", "codex.command empty"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("joined error missing %q: %v", want, err)
 		}
@@ -114,9 +106,10 @@ func TestPollOncePreflightFailureSkipsDispatchAndEmitsRuntimeEvent(t *testing.T)
 		TerminalStates:    []string{"Cancelled", "Done"},
 		WorkerExitTimeout: time.Second,
 	})
-	// Empty api_key + missing codex.command — preflight must catch both.
+	// Provider semantics were admitted at load; per-tick preflight owns the
+	// generic Codex runtime requirement only.
 	preflightCfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: ""},
 	}
 	poller.preflight = &preflightCfg
@@ -139,8 +132,8 @@ func TestPollOncePreflightFailureSkipsDispatchAndEmitsRuntimeEvent(t *testing.T)
 	for _, ev := range view.RecentEvents {
 		if ev.Kind == RuntimeEventDispatchPreflightFailed {
 			saw = true
-			if !strings.Contains(ev.Message, "tracker.api_key empty") || !strings.Contains(ev.Message, "codex.command empty") {
-				t.Errorf("preflight event message does not carry both joined reasons: %q", ev.Message)
+			if !strings.Contains(ev.Message, "codex.command empty") {
+				t.Errorf("preflight event message does not carry the generic runtime reason: %q", ev.Message)
 			}
 		}
 	}
@@ -170,7 +163,7 @@ func TestPollOncePreflightFailureStillReconcilesRunningIssue(t *testing.T) {
 		WorkerExitTimeout: time.Second,
 	})
 	preflightCfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "lin_xxxx", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
 	poller.preflight = &preflightCfg
@@ -190,7 +183,7 @@ func TestPollOncePreflightFailureStillReconcilesRunningIssue(t *testing.T) {
 	trackerClient.setFetchObserver(func([]tracker.IssueRef) { order.record("narrow") })
 	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Done"})
 	trackerClient.setFetchIDErr(refreshErr)
-	preflightCfg.Tracker.APIKey = ""
+	preflightCfg.Codex.Command = ""
 
 	err := poller.PollOnce(ctx)
 	if err == nil || !errors.Is(err, errDispatchPreflight) {
@@ -264,8 +257,8 @@ func TestPollOncePreflightFailureBoundsReconciliationTrackerCalls(t *testing.T) 
 			candidateLister := &fixedActiveIssueLister{}
 			poller.tracker = candidateLister
 			preflightCfg := workflow.Config{
-				Tracker: workflow.TrackerConfig{Kind: "linear", ProjectSlug: "team-x"},
-				Codex:   workflow.CommandConfig{Command: "codex app-server"},
+				Tracker: workflow.TrackerConfig{Provider: map[string]any{"project_slug": "team-x"}, Kind: "linear"},
+				Codex:   workflow.CommandConfig{Command: ""},
 			}
 			poller.preflight = &preflightCfg
 
@@ -344,8 +337,8 @@ func TestPollOncePreflightFailurePatchesClaimedActiveStateWithoutWipingMetadata(
 	poller.tracker = candidateLister
 	trackerClient.setFetchObserver(func([]tracker.IssueRef) { order.record("narrow") })
 	preflightCfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", ProjectSlug: "team-x"},
-		Codex:   workflow.CommandConfig{Command: "codex app-server"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"project_slug": "team-x"}, Kind: "linear"},
+		Codex:   workflow.CommandConfig{Command: ""},
 	}
 	poller.preflight = &preflightCfg
 
@@ -416,7 +409,7 @@ func TestPollOncePreflightSuccessProceedsToFetch(t *testing.T) {
 		WorkerExitTimeout: time.Second,
 	})
 	preflightCfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "lin_xxxx", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
 	poller.preflight = &preflightCfg

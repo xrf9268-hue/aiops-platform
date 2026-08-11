@@ -172,7 +172,7 @@ func githubRateLimitTestClient(t *testing.T, handler http.Handler) *GitHubClient
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	return client
 }

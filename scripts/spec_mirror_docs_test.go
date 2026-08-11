@@ -128,125 +128,40 @@ func TestCurrentDeviationDocsDoNotRouteNewFindingsToHistoricalLedger(t *testing.
 	}
 }
 
-func TestCurrentDocsDoNotCertifyOpenD43AsSPECConformance(t *testing.T) {
+func TestCurrentDocsPinClosedD43ProviderBoundary(t *testing.T) {
 	root := gitRepoRoot(t)
-	assertFilesContainD43Contracts(t, root)
-	assertD43TableRows(t, root)
-	assertStaleD43AttributionsAbsent(t, root)
-}
-
-func assertFilesContainD43Contracts(t *testing.T, root string) {
-	t.Helper()
 	for path, required := range map[string][]string{
-		"README.md": {
-			"`tracker.provider`",
-			"D43",
-			"#1144",
-		},
+		"DEVIATIONS.md": {"| D43 |", "tracker.provider", "| Closed |", "#1144"},
+		"README.md":     {"`tracker.provider`", "adapter-owned", "unknown keys"},
 		"docs/runbooks/workflow-frontmatter-reference.md": {
-			"`tracker.provider`",
-			"D43",
-			"#1144",
-		},
-		"internal/workflow/config_test.go": {
-			"TestDefaultConfig_PinsSPECAndTrackedDefaults",
-			"D43",
-			"#1144",
-		},
-		"internal/orchestrator/poller_test.go": {
-			"TestPollOnceTreatsCurrentDefaultTerminalBlockersAsUnblocked",
-			"D43",
-			"#1144",
-		},
-		"internal/tracker/linear_test.go": {
-			"TestNewLinearClientHonorsCurrentEndpointOverride",
-			"TestNewLinearClientDefaultsToLinearEndpoint",
-			"D43",
-			"#1144",
+			"### Linear provider profile",
+			"### Gitea provider profile",
+			"### GitHub provider profile",
+			"`tracker.provider.api_key`",
+			"`tracker.provider.token`",
 		},
 	} {
 		body := readRepoFile(t, root, path)
+		normalized := bytes.Join(bytes.Fields(body), []byte(" "))
 		for _, contract := range required {
-			if !bytes.Contains(body, []byte(contract)) {
-				t.Errorf("%s is missing D43 attribution contract %q", path, contract)
+			if !bytes.Contains(normalized, []byte(contract)) {
+				t.Errorf("%s is missing closed D43 contract %q", path, contract)
 			}
 		}
 	}
-}
 
-func assertD43TableRows(t *testing.T, root string) {
-	t.Helper()
-	for _, row := range []struct {
-		path     string
-		prefix   string
-		required []string
-	}{
-		{"README.md", "| `tracker.endpoint` |", []string{"D43", "#1144", "`tracker.provider`"}},
-		{"README.md", "| `tracker.project_slug` |", []string{"D43", "#1144", "`tracker.provider`"}},
-		{"README.md", "| `tracker.active_states` |", []string{"D43", "#1144", "adapter-defined"}},
-		{"README.md", "| `tracker.terminal_states` |", []string{"D43", "#1144", "adapter-defined"}},
-		{"docs/runbooks/workflow-frontmatter-reference.md", "| `tracker.api_key` |", []string{"D43", "#1144"}},
-		{"docs/runbooks/workflow-frontmatter-reference.md", "| `tracker.endpoint` |", []string{"D43", "#1144"}},
-		{"docs/runbooks/workflow-frontmatter-reference.md", "| `tracker.team_key` |", []string{"D43", "#1144"}},
-		{"docs/runbooks/workflow-frontmatter-reference.md", "| `tracker.project_slug` |", []string{"D43", "#1144"}},
-		{"docs/runbooks/workflow-frontmatter-reference.md", "| `tracker.active_states` |", []string{"D43", "#1144", "adapter-defined"}},
-		{"docs/runbooks/workflow-frontmatter-reference.md", "| `tracker.terminal_states` |", []string{"D43", "#1144", "adapter-defined"}},
-		{"docs/runbooks/workflow-frontmatter-reference.md", "| `tracker.pagination_max_pages` |", []string{"D43", "#1144"}},
-	} {
-		body := readRepoFile(t, root, row.path)
-		assertLineContainsAll(t, row.path, body, row.prefix, row.required)
-	}
-}
-
-func assertStaleD43AttributionsAbsent(t *testing.T, root string) {
-	t.Helper()
-	for path, stale := range map[string][]string{
-		"README.md": {
-			"table below mirrors SPEC §6.4's cheat-sheet",
-		},
-		"docs/runbooks/workflow-frontmatter-reference.md": {
-			"it deliberately mirrors SPEC's own table",
-			"Tracker API base URL (SPEC §5.3.1)",
-		},
-		"internal/workflow/config_test.go": {
-			"TestDefaultConfig_AlignsToSPEC_6_4",
-			"Tracker.ActiveStates = %#v, want SPEC §6.4 default",
-			"Tracker.TerminalStates = %#v, want SPEC §6.4 default",
-		},
-		"internal/orchestrator/poller_test.go": {
-			"SPEC §5.3.1",
-			"TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked",
-		},
-		"internal/tracker/linear_test.go": {
-			"TestNewLinearClientHonorsEndpointOverride pins SPEC",
-			"TestNewLinearClientDefaultsToSpecEndpoint",
-		},
-	} {
+	for _, path := range []string{"README.md", "docs/runbooks/workflow-frontmatter-reference.md"} {
 		body := readRepoFile(t, root, path)
-		for _, attribution := range stale {
-			if bytes.Contains(body, []byte(attribution)) {
-				t.Errorf("%s still contains stale D43 attribution %q", path, attribution)
+		for _, staleRow := range [][]byte{
+			[]byte("| `tracker.api_key` |"),
+			[]byte("| `tracker.endpoint` |"),
+			[]byte("| `tracker.project_slug` |"),
+			[]byte("| `tracker.pagination_max_pages` |"),
+		} {
+			if bytes.Contains(body, staleRow) {
+				t.Errorf("%s still documents removed flat provider row %q", path, staleRow)
 			}
 		}
-	}
-}
-
-func assertLineContainsAll(t *testing.T, path string, body []byte, prefix string, required []string) {
-	t.Helper()
-	matches := 0
-	for _, line := range bytes.Split(body, []byte("\n")) {
-		if !bytes.HasPrefix(bytes.TrimSpace(line), []byte(prefix)) {
-			continue
-		}
-		matches++
-		for _, contract := range required {
-			if !bytes.Contains(line, []byte(contract)) {
-				t.Errorf("%s line %q is missing contract %q", path, line, contract)
-			}
-		}
-	}
-	if matches != 1 {
-		t.Errorf("%s has %d lines with prefix %q; want exactly 1", path, matches, prefix)
 	}
 }
 

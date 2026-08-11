@@ -69,7 +69,7 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 	// would regress every repo that has not yet adopted the explicit
 	// Symphony front matter.
 	if hasFrontMatter {
-		if err := validateConfig(path, cfg); err != nil {
+		if err := validateConfig(path, &cfg); err != nil {
 			return nil, err
 		}
 	}
