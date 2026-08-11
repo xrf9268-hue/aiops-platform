@@ -68,17 +68,39 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 	// no-file fallback to Source=default). Forcing schema validation on those
 	// would regress every repo that has not yet adopted the explicit
 	// Symphony front matter.
-	if hasFrontMatter {
-		if err := validateConfig(path, &cfg); err != nil {
-			return nil, err
-		}
+	if err := admitSnapshot(path, &cfg, hasFrontMatter); err != nil {
+		return nil, err
 	}
-	normalizeLoadedConfig(&cfg)
 	source := SourceFile
 	if !hasFrontMatter {
 		source = SourcePromptOnly
 	}
 	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body), Source: source}, nil
+}
+
+// admitSnapshot is the single boundary between parsed workflow input and an
+// effective typed snapshot. Load resolves defaults and $VAR indirections
+// before this call, so provider and command checks see effective values. Both
+// cold start and WorkflowRuntime reload call Load; keeping adapter admission,
+// semantic validation, and normalization here prevents any partial
+// config/prompt/fingerprint publication on failure.
+func admitSnapshot(path string, cfg *Config, hasFrontMatter bool) error {
+	if hasFrontMatter {
+		if err := validateTrackerAndRepo(path, *cfg); err != nil {
+			return err
+		}
+		if err := validateSupportedTrackerKind(path, *cfg); err != nil {
+			return err
+		}
+		if err := admitTrackerProvider(path, cfg); err != nil {
+			return err
+		}
+		if err := validateCoreConfig(path, *cfg); err != nil {
+			return err
+		}
+	}
+	normalizeLoadedConfig(cfg)
+	return nil
 }
 
 func validateFrontMatterRoot(path string, frontBytes []byte) error {

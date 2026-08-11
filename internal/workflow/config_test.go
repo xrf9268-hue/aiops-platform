@@ -2297,13 +2297,13 @@ prompt
 	}
 }
 
-// TestValidateConfigRejectsUnsupportedTurnSandboxPolicyType pins the
-// defensive validateConfig guard for codex.turn_sandbox_policy. The YAML
-// loader's UnmarshalYAML rejects unknown policy types before validateConfig
+// TestAdmitSnapshotRejectsUnsupportedTurnSandboxPolicyType pins the
+// defensive snapshot-admission guard for codex.turn_sandbox_policy. The YAML
+// loader's UnmarshalYAML rejects unknown policy types before admission
 // runs, so this branch only fires for a programmatically constructed Config.
-// The direct call keeps the guard covered across the #410 validateConfig
+// The direct call keeps the guard covered across the #410 validator
 // split, which relocates it into a per-section validator.
-func TestValidateConfigRejectsUnsupportedTurnSandboxPolicyType(t *testing.T) {
+func TestAdmitSnapshotRejectsUnsupportedTurnSandboxPolicyType(t *testing.T) {
 	t.Parallel()
 	wf, err := Load(writeTempWorkflow(t, `---
 repo:
@@ -2323,12 +2323,12 @@ prompt
 	}
 	cfg := wf.Config
 	cfg.Codex.TurnSandboxPolicy = CodexSandboxPolicy{Type: "bogus"}
-	err = validateConfig("WORKFLOW.md", &cfg)
+	err = admitSnapshot("WORKFLOW.md", &cfg, true)
 	if err == nil {
-		t.Fatal("validateConfig(turn_sandbox_policy.type=bogus) = nil; want unsupported type rejection")
+		t.Fatal("admitSnapshot(turn_sandbox_policy.type=bogus) = nil; want unsupported type rejection")
 	}
 	if !strings.Contains(err.Error(), "codex.turn_sandbox_policy.type") || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("validateConfig error = %q; want codex.turn_sandbox_policy.type unsupported rejection", err)
+		t.Fatalf("admitSnapshot error = %q; want codex.turn_sandbox_policy.type unsupported rejection", err)
 	}
 }
 

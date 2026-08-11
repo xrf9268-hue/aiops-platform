@@ -6,29 +6,12 @@ import (
 	"strings"
 )
 
-// validateConfig enforces the required-field and enum constraints that the
-// typed YAML decoder cannot express on its own. It runs after expandConfig so
-// env-var indirections (e.g. `clone_url: $REPO_URL`) are evaluated before
-// non-empty checks, and every error includes the workflow file path and the
-// offending field/value so operators can fix the source rather than chasing
-// runtime symptoms (issue #9).
-//
-// It runs the per-section validators in a fixed order and returns the first
-// failure. The order is load-bearing: a config that is invalid in several ways
-// surfaces the earliest validator's message, so the operator-facing precedence
-// is exactly the slice order below. tracker.kind is validated first because
-// later validators branch on it (SPEC §6.4). Add new checks to the validator
-// whose slot preserves that precedence rather than appending blindly.
-func validateConfig(path string, cfg *Config) error {
-	if err := validateTrackerAndRepo(path, *cfg); err != nil {
-		return err
-	}
-	if err := validateSupportedTrackerKind(path, *cfg); err != nil {
-		return err
-	}
-	if err := admitTrackerProvider(path, cfg); err != nil {
-		return err
-	}
+// validateCoreConfig runs the provider-neutral validators after
+// admitSnapshot has checked scheduler prerequisites and installed the selected
+// adapter's effective profile. The fixed order is operator-visible because the
+// first invalid field wins; add checks to the owning validator rather than
+// appending a second admission path.
+func validateCoreConfig(path string, cfg Config) error {
 	for _, validate := range []func(string, Config) error{
 		validateSupportedValues,
 		validateSandbox,
@@ -37,7 +20,7 @@ func validateConfig(path string, cfg *Config) error {
 		validateAgentLimits,
 		validateTimeouts,
 	} {
-		if err := validate(path, *cfg); err != nil {
+		if err := validate(path, cfg); err != nil {
 			return err
 		}
 	}
@@ -144,6 +127,15 @@ func validateServerPort(path string, cfg Config) error {
 // Claude-side options that only Codex supports, and checks the linear_graphql
 // allowed-mutations opt-in.
 func validateCodexClaude(path string, cfg Config) error {
+	// Validate both runner sections as one typed snapshot even when one is not
+	// currently selected: a later reload may switch agent.default, and an
+	// explicitly invalid fallback must not enter the last-good configuration.
+	if strings.TrimSpace(cfg.Codex.Command) == "" {
+		return fmt.Errorf("%s: codex.command must not be blank", path)
+	}
+	if strings.TrimSpace(cfg.Claude.Command) == "" {
+		return fmt.Errorf("%s: claude.command must not be blank", path)
+	}
 	if err := cfg.Codex.TurnSandboxPolicy.Validate("codex.turn_sandbox_policy"); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}

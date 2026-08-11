@@ -32,6 +32,86 @@ Prompt body
 	}
 }
 
+func TestLoadRejectsExplicitWhitespaceRunnerCommands(t *testing.T) {
+	t.Setenv("AIOPS_TEST_ISSUE_1145_BLANK_COMMAND", "   ")
+	tests := []struct {
+		name    string
+		section string
+		command string
+	}{
+		{name: "codex literal", section: "codex", command: `"   "`},
+		{name: "claude literal", section: "claude", command: `"   "`},
+		{name: "codex env", section: "codex", command: "$AIOPS_TEST_ISSUE_1145_BLANK_COMMAND"},
+		{name: "claude env", section: "claude", command: "$AIOPS_TEST_ISSUE_1145_BLANK_COMMAND"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempWorkflow(t, `---
+repo:
+  owner: acme
+  name: widgets
+  clone_url: https://github.com/acme/widgets.git
+tracker:
+  kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/widgets
+`+tt.section+`:
+  command: `+tt.command+`
+---
+Prompt body
+`)
+
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load(%s.command=whitespace) error = nil; want validation error", tt.section)
+			}
+			for _, want := range []string{path, tt.section + ".command", "must not be blank"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("Load(%s.command=whitespace) error = %q; want substring %q", tt.section, err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadKeepsDefaultRunnerCommandsWhenCommandsAreOmitted(t *testing.T) {
+	tests := []struct {
+		name  string
+		extra string
+	}{
+		{name: "both sections omitted"},
+		{name: "codex non-command settings only", extra: "codex:\n  env_passthrough: [CI]\n"},
+		{name: "claude non-command settings only", extra: "claude:\n  env_passthrough: [CI]\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defaults := DefaultConfig()
+			path := writeTempWorkflow(t, `---
+repo:
+  owner: acme
+  name: widgets
+  clone_url: https://github.com/acme/widgets.git
+tracker:
+  kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/widgets
+`+tt.extra+`---
+Prompt body
+`)
+
+			wf, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load(commands omitted): %v", err)
+			}
+			if wf.Config.Codex.Command != defaults.Codex.Command || wf.Config.Claude.Command != defaults.Claude.Command {
+				t.Fatalf("default runner commands = codex %q, claude %q; want %q/%q", wf.Config.Codex.Command, wf.Config.Claude.Command, defaults.Codex.Command, defaults.Claude.Command)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsNonPositiveHooksTimeoutMs(t *testing.T) {
 	tests := []struct {
 		name string
