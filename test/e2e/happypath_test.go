@@ -191,7 +191,14 @@ func runGiteaWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fi
 	cfg.Tracker.Provider = map[string]any{"token": bed.gitea.botToken}
 	cfg.Tracker.ActiveStates = []string{"Todo"}
 	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
-	serviceWorkflow, err := workflow.Load(writeE2EServiceWorkflow(t, string(fixtureContent(t, fixture)), cloneURL))
+	t.Setenv("AIOPS_E2E_GITEA_TOKEN", bed.gitea.botToken)
+	serviceWorkflow, err := workflow.Load(writeE2EServiceWorkflow(
+		t,
+		string(fixtureContent(t, fixture)),
+		cloneURL,
+		bed.gitea.baseURL,
+		owner+"/"+repo,
+	))
 	if err != nil {
 		t.Fatalf("load service workflow: %v", err)
 	}
@@ -375,9 +382,13 @@ func (r *e2eEventRecorder) AddEventWithPayload(_ context.Context, taskID, kind, 
 	return nil
 }
 
-func writeE2EServiceWorkflow(t *testing.T, body, cloneURL string) string {
+func writeE2EServiceWorkflow(t *testing.T, body, cloneURL, baseURL, repo string) string {
 	t.Helper()
-	body = strings.ReplaceAll(body, "http://localhost:3000/aiops-bot/demo-happy.git", cloneURL)
+	body = strings.NewReplacer(
+		"http://localhost:3000/aiops-bot/demo-happy.git", cloneURL,
+		"__GITEA_BASE_URL__", baseURL,
+		"__GITEA_REPO__", repo,
+	).Replace(body)
 	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write service workflow: %v", err)

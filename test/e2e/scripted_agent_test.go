@@ -129,7 +129,13 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	t.Setenv("GITEA_TOKEN", bed.gitea.botToken)
 	t.Setenv("AIOPS_TRACKER_SECRET", bed.gitea.botToken)
 	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
-	serviceWorkflow, err := workflow.Load(writeScriptedAgentServiceWorkflow(t, cloneURL, scriptPath))
+	serviceWorkflow, err := workflow.Load(writeScriptedAgentServiceWorkflow(
+		t,
+		cloneURL,
+		scriptPath,
+		bed.gitea.baseURL,
+		owner+"/"+repo,
+	))
 	if err != nil {
 		t.Fatalf("load service workflow: %v", err)
 	}
@@ -149,7 +155,6 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	cfg.Tracker.Provider = map[string]any{"token": bed.gitea.botToken}
 	cfg.Tracker.ActiveStates = serviceWorkflow.Config.Tracker.ActiveStates
 	cfg.Tracker.TerminalStates = serviceWorkflow.Config.Tracker.TerminalStates
-	serviceWorkflow.Config.Tracker.Provider = map[string]any{"token": bed.gitea.botToken}
 	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
 
@@ -361,7 +366,7 @@ func writeScriptedAgent(t *testing.T, owner, repo, agentBranch string, issueNum 
 // validator-only clone_url and the runtime-generated agent script path) and
 // writes the result where workflow.Load can read it, mirroring
 // writeE2EServiceWorkflow.
-func writeScriptedAgentServiceWorkflow(t *testing.T, cloneURL, agentCommand string) string {
+func writeScriptedAgentServiceWorkflow(t *testing.T, cloneURL, agentCommand, baseURL, repo string) string {
 	t.Helper()
 	body := string(fixtureContent(t, "scripted-agent.md"))
 	// Fail loud when the fixture and these literals drift: a silent no-op
@@ -369,13 +374,19 @@ func writeScriptedAgentServiceWorkflow(t *testing.T, cloneURL, agentCommand stri
 	for _, placeholder := range []string{
 		"http://localhost:3000/aiops-bot/demo-scripted-agent.git",
 		"__SCRIPTED_AGENT_COMMAND__",
+		"__GITEA_BASE_URL__",
+		"__GITEA_REPO__",
 	} {
 		if !strings.Contains(body, placeholder) {
 			t.Fatalf("fixture scripted-agent.md does not contain placeholder %q; update writeScriptedAgentServiceWorkflow alongside the fixture", placeholder)
 		}
 	}
-	body = strings.ReplaceAll(body, "http://localhost:3000/aiops-bot/demo-scripted-agent.git", cloneURL)
-	body = strings.ReplaceAll(body, "__SCRIPTED_AGENT_COMMAND__", agentCommand)
+	body = strings.NewReplacer(
+		"http://localhost:3000/aiops-bot/demo-scripted-agent.git", cloneURL,
+		"__SCRIPTED_AGENT_COMMAND__", agentCommand,
+		"__GITEA_BASE_URL__", baseURL,
+		"__GITEA_REPO__", repo,
+	).Replace(body)
 	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write service workflow: %v", err)
