@@ -33,12 +33,16 @@ Prompt body
 }
 
 func TestLoadRejectsExplicitWhitespaceRunnerCommands(t *testing.T) {
+	t.Setenv("AIOPS_TEST_ISSUE_1145_BLANK_COMMAND", "   ")
 	tests := []struct {
 		name    string
 		section string
+		command string
 	}{
-		{name: "codex", section: "codex"},
-		{name: "claude", section: "claude"},
+		{name: "codex literal", section: "codex", command: `"   "`},
+		{name: "claude literal", section: "claude", command: `"   "`},
+		{name: "codex env", section: "codex", command: "$AIOPS_TEST_ISSUE_1145_BLANK_COMMAND"},
+		{name: "claude env", section: "claude", command: "$AIOPS_TEST_ISSUE_1145_BLANK_COMMAND"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,7 +57,7 @@ tracker:
     token: test-gitea-token
     repo: acme/widgets
 `+tt.section+`:
-  command: "   "
+  command: `+tt.command+`
 ---
 Prompt body
 `)

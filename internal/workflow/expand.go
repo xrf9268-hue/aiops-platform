@@ -54,7 +54,7 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nol
 	// agent.max_concurrent_agents: SPEC §6.4 default of 10 is supplied by
 	// DefaultConfig() and survives YAML overlay when the field is absent.
 	// An explicit `max_concurrent_agents: 0` (or any non-positive value)
-	// is rejected by validateConfig rather than silently coerced — Elixir
+	// is rejected by snapshot admission rather than silently coerced — Elixir
 	// `validate_number(:max_concurrent_agents, greater_than: 0)`
 	// (schema.ex:131,145) makes 0 a validation error, not a request for
 	// the default.

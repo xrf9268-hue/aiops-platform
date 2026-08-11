@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -728,6 +729,10 @@ func TestWorkflowRuntimeSemanticAdmissionKeepsCompleteLastGoodSnapshot(t *testin
 			}
 			lastGood := runtime.Current()
 			lastBinding := lastGood.Workflow.Config.Tracker.ProviderProfile()
+			lastGoodConfig, err := json.Marshal(lastGood.Workflow.Config)
+			if err != nil {
+				t.Fatalf("marshal last-good config: %v", err)
+			}
 
 			writeSemanticAdmissionWorkflow(t, path, tt.invalidYAML("https://gitea.invalid.test"))
 			err = runtime.ReloadOnce(context.Background())
@@ -735,8 +740,24 @@ func TestWorkflowRuntimeSemanticAdmissionKeepsCompleteLastGoodSnapshot(t *testin
 				t.Fatalf("ReloadOnce(invalid snapshot) error = %v; want substring %q", err, tt.wantError)
 			}
 			got := runtime.Current()
-			if !reflect.DeepEqual(got, lastGood) {
-				t.Fatalf("snapshot after rejected reload = %#v; want exact last-good %#v", got, lastGood)
+			if got.Workflow != lastGood.Workflow {
+				t.Fatal("workflow pointer changed after rejected reload; want exact last-good snapshot")
+			}
+			gotConfig, marshalErr := json.Marshal(got.Workflow.Config)
+			if marshalErr != nil {
+				t.Fatalf("marshal config after rejected reload: %v", marshalErr)
+			}
+			if string(gotConfig) != string(lastGoodConfig) {
+				t.Fatalf("config after rejected reload = %s; want exact last-good %s", gotConfig, lastGoodConfig)
+			}
+			if got.Workflow.PromptTemplate != "Initial prompt" || got.Workflow.Config.Polling.IntervalMs != 30000 {
+				t.Fatalf("last-good prompt/interval after rejection = %q/%d; want Initial prompt/30000", got.Workflow.PromptTemplate, got.Workflow.Config.Polling.IntervalMs)
+			}
+			if got.Workflow.Config.Codex.Command != "codex app-server --initial" || got.Workflow.Config.Claude.Command != "claude --initial" {
+				t.Fatalf("last-good runner settings after rejection = codex %q, claude %q", got.Workflow.Config.Codex.Command, got.Workflow.Config.Claude.Command)
+			}
+			if endpoint := got.Workflow.Config.Tracker.Provider["base_url"]; endpoint != "https://gitea.initial.test" {
+				t.Fatalf("last-good tracker.provider.base_url after rejection = %#v; want initial endpoint", endpoint)
 			}
 			if got.Workflow.Config.Tracker.ProviderProfile() != lastBinding {
 				t.Fatal("tracker binding changed after rejected reload")

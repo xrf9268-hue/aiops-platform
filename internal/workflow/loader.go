@@ -84,7 +84,16 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 // here prevents any partial config/prompt/fingerprint publication on failure.
 func admitSnapshot(path string, cfg *Config, hasFrontMatter bool) error {
 	if hasFrontMatter {
-		if err := validateConfig(path, cfg); err != nil {
+		if err := validateTrackerAndRepo(path, *cfg); err != nil {
+			return err
+		}
+		if err := validateSupportedTrackerKind(path, *cfg); err != nil {
+			return err
+		}
+		if err := admitTrackerProvider(path, cfg); err != nil {
+			return err
+		}
+		if err := validateCoreConfig(path, *cfg); err != nil {
 			return err
 		}
 	}
