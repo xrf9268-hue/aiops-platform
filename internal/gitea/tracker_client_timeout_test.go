@@ -27,7 +27,7 @@ func TestTrackerClientRequestTimeoutHonorsExplicitOverride(t *testing.T) {
 }
 
 func TestTrackerClientFallbackHTTPClientUsesRequestTimeout(t *testing.T) {
-	c := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "https://gitea.example", "owner", "repo")
+	c := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, "https://gitea.example", "owner", "repo")
 	c.RequestTimeout = 250 * time.Millisecond
 	client := c.httpClient()
 	if client == nil {
@@ -39,7 +39,7 @@ func TestTrackerClientFallbackHTTPClientUsesRequestTimeout(t *testing.T) {
 }
 
 func TestTrackerClientDefaultHTTPClientIsReused(t *testing.T) {
-	c := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "https://gitea.example", "owner", "repo")
+	c := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, "https://gitea.example", "owner", "repo")
 
 	first := c.httpClient()
 	second := c.httpClient()
@@ -57,7 +57,7 @@ func TestTrackerClientDefaultHTTPClientIsReused(t *testing.T) {
 
 func TestTrackerClientInjectedHTTPClientWins(t *testing.T) {
 	injected := &http.Client{Timeout: 750 * time.Millisecond}
-	c := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "https://gitea.example", "owner", "repo")
+	c := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, "https://gitea.example", "owner", "repo")
 	c.HTTP = injected
 
 	if got := c.httpClient(); got != injected {
@@ -67,10 +67,7 @@ func TestTrackerClientInjectedHTTPClientWins(t *testing.T) {
 
 func TestTrackerClientListIssuesAbortsHungServer(t *testing.T) {
 	srv := hungGiteaServer(t)
-	client := NewTrackerClient(workflow.TrackerConfig{
-		APIKey:       "secret",
-		ActiveStates: []string{"Todo"},
-	}, srv.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, srv.URL, "owner", "repo")
 	client.HTTP = srv.Client()
 	client.RequestTimeout = 100 * time.Millisecond
 
@@ -83,7 +80,7 @@ func TestTrackerClientListIssuesAbortsHungServer(t *testing.T) {
 
 func TestTrackerClientFetchIssueStateAbortsHungServer(t *testing.T) {
 	srv := hungGiteaServer(t)
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, srv.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, srv.URL, "owner", "repo")
 	client.HTTP = srv.Client()
 	client.RequestTimeout = 100 * time.Millisecond
 

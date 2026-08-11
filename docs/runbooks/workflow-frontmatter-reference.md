@@ -4,16 +4,14 @@ The exhaustive operator-facing reference for every key the worker reads from
 `WORKFLOW.md` YAML front matter (schema: `internal/workflow/config.go`). The
 README's [defaults table](../../README.md#workflowmd-configuration) is the
 current-to-SPEC §6.4 mapping view; this page is the complete implementation
-view, including keys that SPEC's cheat-sheet does not list. The current flat
-tracker endpoint/scope/auth fields predate SPEC 0.0.2's adapter-owned
-`tracker.provider` object and remain open deviation D43 / #1144, so their
-presence below documents current behavior rather than conformance. Keep the
-two views consistent and this page the single exhaustive source (clean-code
-rule 3).
+view, including keys that SPEC's cheat-sheet does not list. Tracker-specific
+endpoint, scope, authentication, and pagination settings live only in the
+selected adapter's `tracker.provider` profile. Keep the two views consistent
+and this page the single exhaustive source (clean-code rule 3).
 
 For any one workdir, `worker --print-config /path/to/clone` prints the
-effective resolved config (with `tracker.api_key` masked) and is the ground
-truth this page approximates.
+effective resolved config (with adapter-declared provider secrets masked) and
+is the ground truth this page approximates.
 
 ## Loading semantics
 
@@ -23,12 +21,14 @@ truth this page approximates.
 - **Present front matter must decode to a YAML map.** Unknown top-level keys
   are logged and ignored; known-but-removed keys are rejected with an error
   naming the replacement (see [Removed keys](#removed-keys-rejected-at-load)).
-- **Env indirection.** `tracker.api_key`, `tracker.endpoint`,
-  `repo.clone_url`, `workspace.root`, `codex.command`, `claude.command`, and
-  each `sandbox.credential_files[i]` accept a whole-value `$VAR` / `${VAR}`
-  reference, resolved from the worker's environment at load. An unset or
-  empty variable is a load error; partial interpolation
-  (`https://$HOST/path`) is not expanded.
+- **Env indirection.** Each adapter-documented string under
+  `tracker.provider`, plus `repo.clone_url`, `workspace.root`, `codex.command`,
+  `claude.command`, and each `sandbox.credential_files[i]`, accepts a
+  whole-value `$VAR` / `${VAR}` reference resolved from the worker environment
+  at load. Unknown provider keys remain opaque and are not expanded. A missing
+  referenced value is a load error; an empty provider secret is classified as
+  `missing_tracker_secret`. Partial interpolation (`https://$HOST/path`) is not
+  expanded.
 - **Path expansion.** `workspace.root` and `sandbox.credential_files[*]`
   expand a leading `~/`; a relative `workspace.root` resolves against the
   workflow file's directory.
@@ -55,23 +55,46 @@ truth this page approximates.
 
 ## `tracker`
 
-The flat endpoint/scope/auth fields and cross-provider state defaults below
-describe the current pre-release implementation. SPEC §6.4 assigns those
-settings/defaults to the selected adapter; D43 / #1144 owns their atomic
-replacement with `tracker.provider`.
+Core config selects an adapter and carries only scheduler-owned state and label
+policy. The selected adapter alone interprets `tracker.provider`; unknown keys
+round-trip unchanged through load, reload, and `--print-config`.
 
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
 | `tracker.kind` | string | — | Selects the tracker adapter | **required**; `gitea`, `github`, or `linear` |
-| `tracker.api_key` | string | — | Current flat token field (open D43 / #1144), referenced as `$VAR` (e.g. `$LINEAR_API_KEY`, `$GITEA_TOKEN`, `$GITHUB_TOKEN`). Worker-held: both the variable name and its value are denied from every agent `env_passthrough`/`env_allowlist`, and `--print-config` masks it | `$VAR` resolved at load |
-| `tracker.endpoint` | string | — | Current flat API-base field (open D43 / #1144). Linear defaults to `https://api.linear.app/graphql`. When omitted, GitHub falls back to the `GITHUB_API_BASE_URL` env var, then `https://api.github.com`; Gitea falls back to the `GITEA_BASE_URL` env var, then the local-dev default `http://localhost:3000` | `$VAR` |
-| `tracker.team_key` | string | — | Current flat Linear scope field (open D43 / #1144). Scopes the `linear_graphql` current-issue mutation guard's workflow-state lookup to one team, so state names that repeat across teams resolve unambiguously (`internal/runner/linear_graphql_current_issue_guard.go`) | — |
-| `tracker.project_slug` | string | — | Current flat Linear project scope (open D43 / #1144) | required when `kind: linear` |
-| `tracker.active_states` | string list | `[Todo, In Progress]` | Current cross-provider implementation default; SPEC §6.4 makes the default adapter-defined (open D43 / #1144) | — |
-| `tracker.terminal_states` | string list | `[Closed, Cancelled, Canceled, Duplicate, Done]` | Current cross-provider implementation default; SPEC §6.4 makes the default adapter-defined (open D43 / #1144); terminal states also stop retry/backoff redispatch | — |
+| `tracker.provider` | object | `{}` | Opaque adapter-owned settings. Known adapter strings accept exact `$VAR` / `${VAR}` references; unknown keys and nested values are preserved without core reinterpretation. `--print-config` masks only the selected adapter's declared secret keys | selected adapter validates known keys |
+| `tracker.active_states` | string list | `[Todo, In Progress]` | Scheduler-owned active-state selection | — |
+| `tracker.terminal_states` | string list | `[Closed, Cancelled, Canceled, Duplicate, Done]` | Scheduler-owned terminal-state selection; terminal states stop retry/backoff redispatch | — |
 | `tracker.inactive_states` | string list | `[]` | Non-terminal states that make an already-running issue ineligible: poll-tick reconciliation stops in-flight runs when an issue moves here (operator-pause states such as `Backlog`) | — |
 | `tracker.required_labels` | string list | `[]` (gate off) | Opt-in dispatch gate (SPEC §4.1.1): an issue must carry every listed label to dispatch or keep running. Entries are trimmed, lowercased, de-duped; a blank entry matches no issue. See the README table row for the Linear 250-label projection ceiling | — |
-| `tracker.pagination_max_pages` | int | `0` = adapter default (`github` 10, `gitea` 20, `linear` 200) | Current flat adapter-tuning field (open D43 / #1144). Caps one tracker pagination scan; Linear applies the same cap to issue listing and inverse-relation pagination | ≥ 0 |
+
+### Linear provider profile
+
+| Key | Type | Default | Behavior | Validation |
+|-----|------|---------|----------|------------|
+| `tracker.provider.endpoint` | string | `https://api.linear.app/graphql` | Linear GraphQL endpoint | string; exact `$VAR` supported |
+| `tracker.provider.api_key` | string (secret) | — | Linear authentication. `--print-config` masks it; `LINEAR_API_KEY`, `LINEAR_TOKEN`, the exact referenced env name, and same-value aliases are stripped from hook/agent children | required; empty/missing values return `missing_tracker_secret` |
+| `tracker.provider.project_slug` | string | — | Project slugId used for project-scoped polling | required |
+| `tracker.provider.team_key` | string | — | Optional team scope used by the `linear_graphql` current-issue state guard | string; exact `$VAR` supported |
+| `tracker.provider.pagination_max_pages` | non-negative int | `200` | Caps issue and inverse-relation pagination; `0` retains the default | ≥ 0 |
+
+### Gitea provider profile
+
+| Key | Type | Default | Behavior | Validation |
+|-----|------|---------|----------|------------|
+| `tracker.provider.base_url` | string | `GITEA_BASE_URL`, then `http://localhost:3000` | Gitea REST base URL | string; exact `$VAR` supported |
+| `tracker.provider.token` | string (secret) | — | Gitea authentication. `GITEA_TOKEN`, `GITEA_API_TOKEN`, the exact referenced env name, and same-value aliases are stripped from hook/agent children | required; empty/missing values return `missing_tracker_secret` |
+| `tracker.provider.repo` | string | `repo.owner/repo.name` | Repository scope in `owner/name` form | required after fallback; exactly two non-empty path components |
+| `tracker.provider.pagination_max_pages` | non-negative int | `20` | Caps each label-scoped issue listing; `0` retains the default | ≥ 0 |
+
+### GitHub provider profile
+
+| Key | Type | Default | Behavior | Validation |
+|-----|------|---------|----------|------------|
+| `tracker.provider.api_url` | string | `GITHUB_API_BASE_URL`, then `https://api.github.com` | GitHub REST base URL | string; exact `$VAR` supported |
+| `tracker.provider.token` | string (secret) | — | GitHub authentication. `GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_PAT`, the exact referenced env name, and same-value aliases are stripped from hook/agent children | required; empty/missing values return `missing_tracker_secret` |
+| `tracker.provider.repo` | string | `repo.owner/repo.name` | Repository scope in `owner/name` form | required after fallback; exactly two non-empty path components |
+| `tracker.provider.pagination_max_pages` | non-negative int | `10` | Caps issue, pull-request claim, and blocker pagination; `0` retains the default | ≥ 0 |
 
 ## `polling`
 
@@ -128,7 +151,7 @@ over stdio).
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
 | `codex.command` | string | `codex app-server` | Launch command for the app-server subprocess; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell-environment inheritance | `$VAR`; a `codex exec` argv is rejected (#541) |
-| `codex.env_passthrough` | string list | `[]` | Env vars the Codex app-server subprocess inherits beyond its baseline (`PATH`, `HOME`, `CODEX_HOME`, `TMPDIR`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Tracker/repo tokens (`GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, …) and the `tracker.api_key` variable/value are denied | denied names rejected at load |
+| `codex.env_passthrough` | string list | `[]` | Env vars the Codex app-server subprocess inherits beyond its baseline (`PATH`, `HOME`, `CODEX_HOME`, `TMPDIR`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Adapter-declared tracker secret names, exact referenced names, and same-value aliases are denied | denied names rejected at load |
 | `codex.approval_policy` | map | `granular` with every flag `false` (auto-reject all approval prompts) | Sent as the app-server approval policy | — |
 | `codex.thread_sandbox` | string | `workspace-write` | `thread/start` sandbox string; also the single knob the per-turn policy derives from (DEVIATIONS D32) | — |
 | `codex.turn_sandbox_policy` | typed map | derived from `thread_sandbox` | Explicit per-turn `sandboxPolicy` override; `type` is required (`dangerFullAccess`, `readOnly`, `externalSandbox`, `workspaceWrite`), with per-type required fields (`writableRoots`, `networkAccess`, …) | strict per-type field checking; legacy `mode:`-style shapes rejected |
@@ -223,15 +246,16 @@ loud with the replacement guidance instead of silently dropping them:
 `agent.max_retry_attempts`, `agent.max_timeout_retries` (#577), the
 top-level `pr:` / `safety:` blocks (#578), `tracker.statuses` (#786, worker-side
 tracker writes are agent-side per SPEC §1 / #76 / #678), and `workspace.hooks`
-(#786, use the top-level `hooks:` block). The pre-release compatibility aliases
-`tracker.base_url` (#911, use `tracker.endpoint`), `tracker.poll_interval_ms`
-(#911, use `polling.interval_ms`), and Gitea `tracker.project_slug` (#911, use
-`tracker.endpoint`; Linear still uses `tracker.project_slug` as the project
-slug) are also rejected at load.
+(#786, use the top-level `hooks:` block). The pre-release flat provider fields
+`tracker.api_key`, `tracker.endpoint`, `tracker.team_key`,
+`tracker.project_slug`, `tracker.pagination_max_pages`, and
+`tracker.base_url` are rejected under #1144; move the selected adapter's key
+under `tracker.provider`. `tracker.poll_interval_ms` (#911) is also rejected;
+use `polling.interval_ms`.
 
 ## Coverage
 
 Every YAML-tagged field in `internal/workflow/config.go` appears above.
-Unexported struct fields (`apiKeyEnvVar`, `portSet`, `rootSet`,
+Unexported struct fields (`profile`, `portSet`, `rootSet`,
 `hookFields`, `turnSandboxPolicySet`) carry loader bookkeeping, have no YAML
 tag, and are not front-matter keys.

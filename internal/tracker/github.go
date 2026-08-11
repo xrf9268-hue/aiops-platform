@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	githubprofile "github.com/xrf9268-hue/aiops-platform/internal/trackerprofile/github"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -21,13 +22,14 @@ const (
 var githubClaimedIssueRE = regexp.MustCompile(`(?i)\b(?:(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)|(?:(?:assigned|github)\s+)?issue)\s*:?\s+(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#([0-9]+)\b`)
 
 type GitHubClient struct {
-	BaseURL string
-	Token   string
-	Owner   string
-	Repo    string
-	Config  workflow.TrackerConfig
-	HTTP    *http.Client
-	Logf    func(format string, args ...any)
+	BaseURL            string
+	Token              string
+	Owner              string
+	Repo               string
+	PaginationMaxPages int
+	Config             workflow.TrackerConfig
+	HTTP               *http.Client
+	Logf               func(format string, args ...any)
 	// RequestTimeout caps the wall-clock duration of a single GitHub
 	// REST request. Zero falls back to defaultGitHubRequestTimeout.
 	// Closes #295: without a per-request bound, a hung api.github.com
@@ -91,32 +93,42 @@ type githubPullRequestSummary struct {
 }
 
 // NewGitHubClientFromEnv builds the GitHub tracker client with the base URL
-// resolved exactly as the worker dispatch does: tracker.endpoint first, then
+// resolved exactly as the worker dispatch does: tracker.provider.api_url first, then
 // the GITHUB_API_BASE_URL environment variable, then the constructor's
 // api.github.com default. Shared by cmd/worker and internal/doctor so the
 // doctor preflight can never drift from the poll loop's resolution (PR #801
 // drift class).
 func NewGitHubClientFromEnv(cfg workflow.TrackerConfig, owner, repo string) *GitHubClient {
-	baseURL := cfg.Endpoint
-	if baseURL == "" {
-		baseURL = os.Getenv("GITHUB_API_BASE_URL")
+	profile := githubProfileForConfig(cfg, owner, repo)
+	if profile != nil {
+		return NewGitHubClient(cfg, profile.APIURL, profile.Owner, profile.Repo)
 	}
-	return NewGitHubClient(cfg, baseURL, owner, repo)
+	return NewGitHubClient(cfg, os.Getenv("GITHUB_API_BASE_URL"), owner, repo)
 }
 
 func NewGitHubClient(cfg workflow.TrackerConfig, baseURL, owner, repo string) *GitHubClient {
+	profile := githubProfileForConfig(cfg, owner, repo)
 	if strings.TrimSpace(baseURL) == "" {
-		baseURL = cfg.Endpoint
-	}
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = "https://api.github.com"
+		baseURL = profile.APIURL
 	}
 	return &GitHubClient{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Token:   cfg.APIKey,
-		Owner:   owner,
-		Repo:    repo,
-		Config:  cfg,
-		HTTP:    http.DefaultClient,
+		BaseURL:            strings.TrimRight(baseURL, "/"),
+		Token:              profile.Token,
+		Owner:              profile.Owner,
+		Repo:               profile.Repo,
+		PaginationMaxPages: profile.PaginationMaxPages,
+		Config:             cfg,
+		HTTP:               http.DefaultClient,
 	}
+}
+
+func githubProfileForConfig(cfg workflow.TrackerConfig, owner, repo string) *githubprofile.Profile {
+	if profile, ok := cfg.ProviderProfile().(*githubprofile.Profile); ok {
+		return profile
+	}
+	profile, err := githubprofile.Parse(cfg.Provider, owner, repo, os.LookupEnv)
+	if err == nil {
+		return profile
+	}
+	return &githubprofile.Profile{APIURL: githubprofile.DefaultAPIURL, Owner: owner, Repo: repo, PaginationMaxPages: githubMaxIssuePages}
 }

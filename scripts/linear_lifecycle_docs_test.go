@@ -106,11 +106,11 @@ func TestConcurrentLinearLifecycleRunbookPinsFiveStateHandoffContract(t *testing
 	if cfg.Tracker.Kind != "linear" {
 		t.Fatalf("tracker.kind = %q; want %q", cfg.Tracker.Kind, "linear")
 	}
-	if cfg.Tracker.APIKey != "linear-docs-test-key" {
-		t.Fatalf("tracker.api_key = %q; want env-expanded LINEAR_API_KEY", cfg.Tracker.APIKey)
+	if cfg.Tracker.Provider["api_key"] != "linear-docs-test-key" {
+		t.Fatalf("tracker.provider.api_key = %q; want env-expanded LINEAR_API_KEY", cfg.Tracker.Provider["api_key"])
 	}
-	if cfg.Tracker.ProjectSlug == "" {
-		t.Fatalf("tracker.project_slug = %q; want non-empty placeholder", cfg.Tracker.ProjectSlug)
+	if cfg.Tracker.Provider["project_slug"] == "" {
+		t.Fatalf("tracker.provider.project_slug = %q; want non-empty placeholder", cfg.Tracker.Provider["project_slug"])
 	}
 	if !cfg.Codex.LinearGraphQL.AllowMutations {
 		t.Fatalf("codex.linear_graphql.allow_mutations = false; want true")

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
-	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 const defaultLinearGraphQLEndpoint = tracker.DefaultLinearEndpoint
@@ -294,10 +293,6 @@ func (p linearGraphQLProxy) linearGraphQLRequest(ctx context.Context, body []byt
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", linearAuthorizationHeader(p.apiKey))
 	return req, nil
-}
-
-func linearGraphQLEndpointFromConfig(cfg workflow.TrackerConfig) string {
-	return linearGraphQLEndpoint(cfg.Endpoint)
 }
 
 func linearGraphQLEndpoint(endpoint string) string {

@@ -89,9 +89,7 @@ func TestPollerLoopGitHubClientDispatchesActiveIssue(t *testing.T) {
 		func() any { return githubIssueJSON("Todo") },
 	)
 	defer srv.Close()
-	client := tracker.NewGitHubClient(workflow.TrackerConfig{
-		APIKey: "test-token", ActiveStates: []string{"Todo"}, TerminalStates: []string{"Done"},
-	}, srv.URL, "acme", "api")
+	client := tracker.NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"Todo"}, TerminalStates: []string{"Done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -145,9 +143,7 @@ func TestPollerLoopGitHubClientReconcileCancelsIssueLeavingActive(t *testing.T) 
 		func() any { return githubIssueJSON(label()) },
 	)
 	defer srv.Close()
-	client := tracker.NewGitHubClient(workflow.TrackerConfig{
-		APIKey: "test-token", ActiveStates: []string{"Todo"}, TerminalStates: []string{"Done"},
-	}, srv.URL, "acme", "api")
+	client := tracker.NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"Todo"}, TerminalStates: []string{"Done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	ctx, cancel := context.WithCancel(context.Background())

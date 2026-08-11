@@ -38,28 +38,21 @@ func rejectRemovedFields(front []byte) error {
 	return rejectRemovedMiscFields(raw)
 }
 
-// rejectRemovedTrackerFields surfaces a clear error for the `tracker.statuses`
-// block removed under #786. It named the workflow states used for worker-side
-// tracker handoff writes, but those writes were removed under #76/#678 (SPEC §1:
-// tracker writes are agent-side via the linear_graphql tool), so no worker code
-// path ever read the resolved names — upstream `config/schema.ex` has no
-// `statuses` field either. Failing loud keeps a stale workflow from believing
-// the worker honors its custom state names.
+// rejectRemovedTrackerFields rejects provider settings from the pre-release
+// flat schema so a stale workflow cannot appear to work after adapter-owned
+// tracker.provider admission replaces it (#1144).
 func rejectRemovedTrackerFields(raw map[string]any) error {
 	tracker, ok := raw["tracker"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	if _, present := tracker["base_url"]; present {
-		return fmt.Errorf("tracker.base_url is no longer supported (#911): use tracker.endpoint")
+	for _, key := range []string{"api_key", "endpoint", "team_key", "project_slug", "pagination_max_pages", "base_url"} {
+		if _, present := tracker[key]; present {
+			return fmt.Errorf("tracker.%s is no longer supported (#1144): move the selected adapter's setting under tracker.provider", key)
+		}
 	}
 	if _, present := tracker["poll_interval_ms"]; present {
 		return fmt.Errorf("tracker.poll_interval_ms is no longer supported (#911): use polling.interval_ms")
-	}
-	if kind, _ := tracker["kind"].(string); strings.EqualFold(kind, "gitea") {
-		if _, present := tracker["project_slug"]; present {
-			return fmt.Errorf("tracker.project_slug is no longer supported for Gitea (#911): use tracker.endpoint. tracker.project_slug remains the Linear project slug field")
-		}
 	}
 	if _, present := tracker["statuses"]; present {
 		return fmt.Errorf("tracker.statuses is no longer supported (#786): worker-side tracker status writes were removed under #76/#678 (SPEC §1: tracker writes are agent-side), so the worker never read these names. Remove the `statuses:` block; drive workflow-state moves from the agent's WORKFLOW prompt / linear_graphql tool surface")

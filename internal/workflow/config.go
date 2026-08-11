@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/trackerprofile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -125,15 +126,9 @@ type RepoConfig struct {
 }
 
 type TrackerConfig struct {
-	Kind         string `yaml:"kind" json:"kind"`
-	APIKey       string `yaml:"api_key" json:"api_key"`
-	apiKeyEnvVar string
-	// Endpoint is the tracker base/GraphQL URL (SPEC §5.3.1). For
-	// `kind: linear` the default is `https://api.linear.app/graphql`;
-	// GitHub Enterprise / Gitea installs name their REST root here.
-	Endpoint       string   `yaml:"endpoint" json:"endpoint"`
-	TeamKey        string   `yaml:"team_key" json:"team_key"`
-	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
+	Kind           string         `yaml:"kind" json:"kind"`
+	Provider       map[string]any `yaml:"provider" json:"provider"`
+	profile        trackerprofile.Profile
 	ActiveStates   []string `yaml:"active_states" json:"active_states"`
 	TerminalStates []string `yaml:"terminal_states" json:"terminal_states"`
 	// InactiveStates names non-terminal tracker states that make an already
@@ -156,9 +151,45 @@ type TrackerConfig struct {
 	// page cap and a single issue carrying 250+ labels is pathological, keep
 	// the marker set small rather than relying on labels beyond the ceiling.
 	RequiredLabels []string `yaml:"required_labels" json:"required_labels"`
-	// PaginationMaxPages caps one tracker pagination scan. Zero keeps the
-	// selected adapter's default budget.
-	PaginationMaxPages int `yaml:"pagination_max_pages" json:"pagination_max_pages,omitempty"`
+}
+
+// ProviderProfile returns the selected adapter's admitted effective profile.
+// Core workflow code must not inspect adapter-specific provider keys directly.
+func (t TrackerConfig) ProviderProfile() trackerprofile.Profile {
+	return t.profile
+}
+
+// SecretEnvironmentNames returns adapter-declared aliases plus the exact
+// environment variable referenced by a documented provider secret.
+func (t TrackerConfig) SecretEnvironmentNames() []string {
+	if t.profile == nil {
+		return nil
+	}
+	return t.profile.SecretEnvironmentNames()
+}
+
+// SecretValues returns admitted adapter secret values for same-value alias
+// filtering at child-process boundaries.
+func (t TrackerConfig) SecretValues() []string {
+	if t.profile == nil {
+		return nil
+	}
+	return t.profile.SecretValues()
+}
+
+// MaskedProvider returns an isolated provider copy with only keys declared
+// secret by the selected adapter replaced by mask.
+func (t TrackerConfig) MaskedProvider(mask string) map[string]any {
+	provider := trackerprofile.CloneProvider(t.Provider)
+	if t.profile == nil {
+		return provider
+	}
+	for _, key := range t.profile.SecretKeys() {
+		if _, present := provider[key]; present {
+			provider[key] = mask
+		}
+	}
+	return provider
 }
 
 // normalizeLoadedConfig applies the post-parse normalizations that run after
@@ -415,6 +446,7 @@ func DefaultConfig() Config {
 		// explicitly; the loader rejects an empty kind with a SPEC-aware
 		// error (see validateConfig in loader.go).
 		Tracker: TrackerConfig{
+			Provider:       map[string]any{},
 			ActiveStates:   []string{"Todo", "In Progress"},
 			TerminalStates: []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"},
 		},

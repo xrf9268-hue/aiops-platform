@@ -9,7 +9,7 @@ import (
 
 func TestBuildSanitizedEnvDeniesTrackerCredentialsAndDeduplicates(t *testing.T) {
 	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{APIKey: "configured-tracker-secret"},
+		Tracker: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "configured-tracker-secret", "project_slug": "platform"}},
 	}
 	lookupValues := map[string]string{
 		"PATH":                       "/worker/path",
@@ -17,7 +17,12 @@ func TestBuildSanitizedEnvDeniesTrackerCredentialsAndDeduplicates(t *testing.T) 
 		"AIOPS_ALLOWED":              "allowed-value",
 		"AIOPS_DUPLICATE":            "duplicate-value",
 		"GITHUB_TOKEN":               "github-secret",
+		"GH_TOKEN":                   "github-secret-alias",
+		"GITHUB_PAT":                 "github-pat-alias",
+		"GITEA_API_TOKEN":            "gitea-secret-alias",
+		"LINEAR_TOKEN":               "linear-secret-alias",
 		"AIOPS_CONFIGURED_TRACKER":   "configured-tracker-secret",
+		"AIOPS_SAME_VALUE_ALIAS":     "configured-tracker-secret",
 		"AIOPS_UNRELATED_TRACKERISH": "not-the-configured-secret",
 	}
 
@@ -26,7 +31,12 @@ func TestBuildSanitizedEnvDeniesTrackerCredentialsAndDeduplicates(t *testing.T) 
 		[]string{
 			"AIOPS_ALLOWED",
 			"GITHUB_TOKEN",
+			"GH_TOKEN",
+			"GITHUB_PAT",
+			"GITEA_API_TOKEN",
+			"LINEAR_TOKEN",
 			"AIOPS_CONFIGURED_TRACKER",
+			"AIOPS_SAME_VALUE_ALIAS",
 			"AIOPS_UNRELATED_TRACKERISH",
 			"AIOPS_DUPLICATE",
 			"AIOPS_DUPLICATE",
@@ -59,7 +69,7 @@ func TestBuildSanitizedEnvDeniesTrackerCredentialsAndDeduplicates(t *testing.T) 
 			t.Fatalf("%s appeared %d times, want 1 in env %#v", tc.name, counts[tc.name], env)
 		}
 	}
-	for _, denied := range []string{"GITHUB_TOKEN", "AIOPS_CONFIGURED_TRACKER", "BAD"} {
+	for _, denied := range []string{"GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT", "GITEA_API_TOKEN", "LINEAR_TOKEN", "AIOPS_CONFIGURED_TRACKER", "AIOPS_SAME_VALUE_ALIAS", "BAD"} {
 		if counts[denied] != 0 {
 			t.Fatalf("denied env %s appeared %d times in env %#v", denied, counts[denied], env)
 		}

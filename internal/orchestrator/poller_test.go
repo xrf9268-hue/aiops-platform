@@ -668,7 +668,7 @@ func TestPollOnceZeroResultListingErrorStillReconcilesRunningIssue(t *testing.T)
 		ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}, WorkerExitTimeout: time.Second,
 	})
 	preflightCfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "lin_xxxx", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
 	poller.preflight = &preflightCfg
@@ -712,7 +712,7 @@ func TestPollOncePartialListingErrorStillReconcilesAndDispatchesReturnedCandidat
 		ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}, WorkerExitTimeout: time.Second,
 	})
 	preflightCfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "lin_xxxx", "project_slug": "team-x"}, Kind: "linear"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
 	poller.preflight = &preflightCfg
@@ -1126,9 +1126,8 @@ func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	// Construct through the production reconciliation path with the current
-	// cross-provider terminal-state default. D43 / #1144 tracks the move to
-	// adapter-defined defaults; until then a Done blocker remains terminal.
+	// Construct through the production reconciliation path with the documented
+	// scheduler-owned terminal-state default; a Done blocker remains terminal.
 	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
 		ActiveStates:   []string{"Todo"},
 		TerminalStates: workflow.DefaultConfig().Tracker.TerminalStates,
@@ -1282,7 +1281,7 @@ func TestPollOnceTreatsCurrentDefaultTerminalBlockersAsUnblocked(t *testing.T) {
 	}
 
 	// Use workflow.DefaultConfig().Tracker.TerminalStates so the test exercises
-	// the current D43 / #1144 5-state implementation default. Previously this
+	// the current 5-state scheduler default. Previously this
 	// was hard-coded to ["Done", "Canceled"] and relied on
 	// filterEligibleCandidates's now-removed overlay (#232) to backfill the
 	// remaining three terminal states.
@@ -1344,7 +1343,7 @@ func TestPollOnceTodoBlockerHonorsOperatorConfiguredTerminalStates(t *testing.T)
 // TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll confirms
 // that an explicitly empty terminal_states slice from
 // NewPollerWithReconciliation reaches filterEligibleCandidates verbatim — it
-// is NOT silently replaced by the current D43 / #1144 DefaultConfig 5-state
+// is NOT silently replaced by the current DefaultConfig 5-state
 // set. Defaults apply on omission, not on an explicit override.
 func TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll(t *testing.T) {
 	issues := []tracker.Issue{

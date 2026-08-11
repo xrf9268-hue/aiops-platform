@@ -112,8 +112,9 @@ agent:
   max_concurrent_agents: 2
 tracker:
   kind: linear
-  api_key: $LINEAR_API_KEY
-  project_slug: PROJECT-SLUG
+  provider:
+    api_key: $LINEAR_API_KEY
+    project_slug: PROJECT-SLUG
   active_states:
     - Todo
     - In Progress

@@ -17,10 +17,10 @@ func (c *TrackerClient) ListActiveIssues(ctx context.Context) ([]tracker.Issue, 
 
 func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) { //nolint:gocognit // baseline (#521)
 	if c.BaseURL == "" || c.Token == "" {
-		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
+		return nil, fmt.Errorf("Gitea tracker base URL and token are required")
 	}
 	if c.Owner == "" || c.Repo == "" {
-		return nil, fmt.Errorf("repo.owner and repo.name are required for Gitea tracker polling")
+		return nil, fmt.Errorf("Gitea tracker repository scope is required")
 	}
 	wantedStates := normalizedStateSet(states)
 	if len(wantedStates) == 0 {

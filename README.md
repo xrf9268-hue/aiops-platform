@@ -150,33 +150,29 @@ export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md                 # Linear
 # export AIOPS_WORKFLOW_PATH=$PWD/examples/github-local-WORKFLOW.md  # GitHub
 export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
-# For tracker.kind: linear  (consumed via WORKFLOW.md "api_key: $LINEAR_API_KEY")
+# For tracker.kind: linear  (tracker.provider.api_key)
 export LINEAR_API_KEY=your-linear-personal-key
-# Set tracker.project_slug in WORKFLOW.md to the Linear project slugId.
+# Set tracker.provider.project_slug in WORKFLOW.md to the Linear project slugId.
 # Example: a Linear project URL ending in /project/aiops-platform-abc123
 # uses project_slug: aiops-platform-abc123.
 
-# For tracker.kind: gitea  (consumed via WORKFLOW.md "api_key: $GITEA_TOKEN")
-# Set tracker.endpoint in WORKFLOW.md to the Gitea base URL — a literal URL
-# or "endpoint: $GITEA_BASE_URL"; the bare export below is only the runtime
-# fallback when tracker.endpoint is empty.
+# For tracker.kind: gitea  (tracker.provider.token)
+# Set tracker.provider.base_url to a literal URL or "$GITEA_BASE_URL"; the
+# bare export below is the adapter fallback when provider.base_url is omitted.
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
 
-# For tracker.kind: github  (consumed via WORKFLOW.md "api_key: $GITHUB_TOKEN")
+# For tracker.kind: github  (tracker.provider.token)
 export GITHUB_TOKEN=$(gh auth token -h github.com)
 
 go run ./cmd/worker
 ```
 
-The worker never reads these tracker tokens directly: a token reaches it only
-when `tracker.api_key` in the selected `WORKFLOW.md` references the variable as
-the entire field value (`$VAR` / `${VAR}`). The shipped examples already wire
-the right variable per tracker kind — `examples/WORKFLOW.md`
-(`api_key: $LINEAR_API_KEY`), `examples/gitea-WORKFLOW.md`
-(`api_key: $GITEA_TOKEN`), `examples/github-local-WORKFLOW.md`
-(`api_key: $GITHUB_TOKEN`). Exporting a token without that `api_key` line
-leaves the worker unauthenticated against the tracker.
+The selected adapter reads its secret only from `tracker.provider`: Linear uses
+`api_key`, while Gitea and GitHub use `token`. A whole-value `$VAR` / `${VAR}`
+reference resolves at load; exporting a token without that provider key leaves
+the workflow invalid. The shipped examples wire `$LINEAR_API_KEY`,
+`$GITEA_TOKEN`, and `$GITHUB_TOKEN` respectively.
 
 `WORKFLOW.md` front matter is the source of truth for runtime workspace
 placement: when `workspace.root` is set in the selected workflow, the worker
@@ -370,10 +366,9 @@ not searched and are not reported as shadowed workflow sources.
 If the canonical file does not exist, the worker proceeds with built-in
 defaults. The table below maps the current implementation to SPEC §6.4's
 cheat-sheet so a SPEC reader can compare it with `worker --print-config`
-output. SPEC 0.0.2 moves endpoint/scope/auth settings into the adapter-owned
-`tracker.provider` object and makes state defaults adapter-defined; the
-current flat fields and cross-provider state defaults remain open deviation
-D43 / #1144 rather than SPEC conformance. The table is deliberately partial —
+output. Endpoint, scope, authentication, and pagination settings live in the
+adapter-owned `tracker.provider` object. Core keeps the scheduler-owned state
+and label selections. The table is deliberately partial —
 the exhaustive key-by-key reference (every front-matter key with type, default,
 behavior, and validation rule) is
 [`docs/runbooks/workflow-frontmatter-reference.md`](docs/runbooks/workflow-frontmatter-reference.md):
@@ -392,12 +387,10 @@ behavior, and validation rule) is
 | `server.port` | `4000` (`-1` disables the HTTP state server + dashboard) | implementation |
 | `policy.mode` | `draft_pr` (or `analysis_only`) | implementation |
 | `tracker.kind` | none — REQUIRED per SPEC §6.4; the loader rejects an empty value with an error that names the field and the allowed set (`gitea`, `github`, `linear`) | SPEC §6.4 |
-| `tracker.endpoint` | Linear defaults to `https://api.linear.app/graphql`; Gitea/GitHub use this as the REST API base URL, with env fallbacks only when omitted | implementation (open D43 / #1144; SPEC replacement: `tracker.provider`) |
-| `tracker.project_slug` | required for `tracker.kind: linear` | implementation (open D43 / #1144; SPEC replacement: `tracker.provider`) |
-| `tracker.active_states` | `[Todo, In Progress]` | implementation default (open D43 / #1144; SPEC §6.4 makes the default adapter-defined) |
-| `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | implementation default (open D43 / #1144; SPEC §6.4 makes the default adapter-defined) |
+| `tracker.provider` | `{}` — selected adapter owns known keys/defaults and preserves unknown keys; see the [adapter profiles](docs/runbooks/workflow-frontmatter-reference.md#tracker) | SPEC §6.4 / §11.2 |
+| `tracker.active_states` | `[Todo, In Progress]` | scheduler-owned implementation default |
+| `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | scheduler-owned implementation default |
 | `tracker.required_labels` | `[]` (gate off) — opt-in dispatch filter: an issue must carry every listed label (matched case-insensitively after trimming) to dispatch or keep running. Removing a required label makes a running agent self-stop after its current turn (per-turn refresh) and releases retry/blocked work on the next poll. A blank entry matches no issue. Labels are projected up to the Linear API's 250-per-issue page maximum; a required label beyond that window is outside the gate's evidence (an issue carrying 250+ labels is pathological — keep the marker set small). | SPEC §4.1.1 / §6.4 |
-| `tracker.pagination_max_pages` | adapter default (`github`: 10 pages; `gitea`: 20 pages; `linear`: 200 pages) | implementation |
 | `workspace.root` | `<system-temp>/symphony_workspaces` (resolved via `os.TempDir()` at startup, typically `/tmp/symphony_workspaces` on Linux; per-boot — set explicitly to a long-lived path for persistence) | SPEC §6.4 |
 | `verify.commands` | none — surfaced to the agent's prompt as its own pre-handoff responsibility; the worker does not run them (SPEC §1 agent boundary) | implementation |
 
@@ -436,8 +429,9 @@ worker --print-config /path/to/repo/clone
 worker --print-config /path/to/repo/clone --port=4001
 ```
 
-The output is JSON. `tracker.api_key` is masked as `***`; the prompt template is
-summarized (length + first line) rather than printed verbatim — `cat
+The output is JSON. Adapter-declared `tracker.provider` secrets are masked as
+`***`, while endpoint/scope and unknown provider keys remain visible. The prompt
+template is summarized (length + first line) rather than printed verbatim — `cat
 <resolution.path>` to see the full body. For post-hoc inspection, the
 `workflow_resolved` task event records the source and path of every run;
 `shadowed_by` is omitted unless future non-legacy resolution metadata is added.
@@ -546,7 +540,7 @@ Two behaviors keep the label-as-state loop safe:
   `open`, which is neither active nor a configured inactive/terminal state.
   Close the issue to stop work that is already running.
 
-`tracker.api_key` needs only read access — a fine-grained PAT with read-only
+`tracker.provider.token` needs only read access — a fine-grained PAT with read-only
 **Issues**, **Pull requests**, and **Metadata** permissions on the target
 repository (classic-PAT equivalent: `public_repo`, or `repo` for private
 repositories).

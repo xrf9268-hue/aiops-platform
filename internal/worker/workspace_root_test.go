@@ -83,6 +83,9 @@ func loadWorkflowConfigForTest(t *testing.T, extraFrontMatter string) workflow.C
   default_branch: main
 tracker:
   kind: gitea
+  provider:
+    token: test-gitea-token
+    repo: acme/repo
 ` + "---\nPrompt body\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)

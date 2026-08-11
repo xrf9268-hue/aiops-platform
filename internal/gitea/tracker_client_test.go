@@ -46,7 +46,7 @@ func TestTrackerClientListIssuesByStatesReturnsNoIssuesWhenNoStatesRequested(t *
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), nil)
 	if err != nil {
@@ -88,10 +88,7 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{
-		APIKey:       "secret",
-		ActiveStates: []string{"Todo", "Rework"},
-	}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo", "Rework"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	issues, err := client.ListActiveIssues(context.Background())
@@ -144,10 +141,7 @@ func TestTrackerClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) 
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{
-		APIKey:       "secret",
-		ActiveStates: []string{"Todo"},
-	}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	if _, err := client.ListActiveIssues(context.Background()); err != nil {
@@ -191,7 +185,7 @@ func TestTrackerClientFetchIssueStatesByRefsOutcomeMatrixAndPartialError(t *test
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	client.issueNumbers.Store("202", 2)
 	refs := []tracker.IssueRef{
@@ -239,7 +233,7 @@ func TestTrackerClientFetchIssueStatesPayloadNumberMismatchStaysUnknown(t *testi
 		_ = json.NewEncoder(w).Encode(Issue{ID: 101, Number: 2, Labels: []Label{{Name: "aiops/done"}}})
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	client.issueNumbers.Store("101", 1)
 
@@ -280,7 +274,7 @@ func TestTrackerClientFetchIssueStatesPartialPayloadAndEmptyLabels(t *testing.T)
 				_, _ = io.WriteString(w, tc.payload)
 			}))
 			defer server.Close()
-			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+			client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 			client.HTTP = server.Client()
 			client.issueNumbers.Store("101", 1)
 
@@ -316,7 +310,7 @@ func TestTrackerClientFetchIssueStatesTodoRequiresBodyKey(t *testing.T) {
 				_, _ = io.WriteString(w, `{"id":101,"number":1,"labels":[{"name":"aiops/todo"}]`+tc.body+`}`)
 			}))
 			defer server.Close()
-			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+			client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 			client.HTTP = server.Client()
 
 			states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}})
@@ -346,7 +340,7 @@ func TestTrackerClientFetchIssueStatesIncompletePayloadPreservesLaterCurrent(t *
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
@@ -365,7 +359,7 @@ func TestTrackerClientFetchIssueStatesRateLimitStopsLaterRefs(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
@@ -388,7 +382,7 @@ func TestTrackerClientFetchIssueStatesRequestDeadlineStopsLaterRefs(t *testing.T
 		_, _ = io.WriteString(w, `{"id":202,"number":2,"labels":[{"name":"aiops/done"}]}`)
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
 		base: server.Client().Transport,
 		path: "/api/v1/repos/owner/repo/issues/1",
@@ -416,7 +410,7 @@ func TestTrackerClientFetchIssueStatesUnknownForUnknownAiopsLabel(t *testing.T) 
 		_ = json.NewEncoder(w).Encode(Issue{ID: 808, Number: 8, Labels: []Label{{Name: "aiops/future-state"}}})
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "808", Identifier: "#8"}})
@@ -435,7 +429,7 @@ func TestTrackerClientFetchIssueStatesUnknownForInconsistentCachedRefOutcome(t *
 		http.NotFound(w, r)
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	tests := []struct {
 		name string
@@ -505,7 +499,7 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "987654", Identifier: "#7"}})
@@ -608,10 +602,7 @@ func TestTrackerClientListIssuesByStatesDeduplicatesIssuesReturnedForMultipleLab
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{
-		APIKey:       "secret",
-		ActiveStates: []string{"Todo", "Rework"},
-	}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo", "Rework"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	issues, err := client.ListActiveIssues(context.Background())
@@ -639,7 +630,7 @@ func TestTrackerClientListIssuesByStatesFiltersTerminalAndMissingStates(t *testi
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -664,7 +655,7 @@ func TestTrackerClientListIssuesByStatesQueriesAllForTerminalStates(t *testing.T
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Done"})
 	if err != nil {
@@ -689,7 +680,7 @@ func TestTrackerClientListIssuesByStatesUsesConfiguredTerminalStatesForGiteaStat
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", TerminalStates: []string{"Shipped"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, TerminalStates: []string{"Shipped"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Shipped"})
 	if err != nil {
@@ -710,7 +701,7 @@ func TestTrackerClientListIssuesByStatesUsesDeterministicConflictState(t *testin
 	defer server.Close()
 
 	var diagnostics []string
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	client.Logf = func(format string, args ...any) {
 		diagnostics = append(diagnostics, fmt.Sprintf(format, args...))
@@ -746,7 +737,7 @@ func TestTrackerClientListIssuesByStatesAllowsExactlyFullMaxPages(t *testing.T) 
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -788,7 +779,7 @@ func TestTrackerClientListIssuesByStatesErrorsWhenLabelOverflows(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", PaginationMaxPages: 1}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret", "pagination_max_pages": 1}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	client.Logf = func(format string, args ...any) {
 		logs = append(logs, fmt.Sprintf(format, args...))
@@ -835,7 +826,7 @@ func TestTrackerClientListIssuesByStatesContinuesWhenServerCapsPageBelowRequeste
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -896,10 +887,7 @@ func TestTrackerClientListIssuesByStatesNormalizesLabelsAndBlockedBy(t *testing.
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{
-		APIKey:       "secret",
-		ActiveStates: []string{"Todo"},
-	}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
@@ -961,10 +949,7 @@ func TestTrackerClientListIssuesByStatesTreatsMergingBlockerAsNonTerminal(t *tes
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{
-		APIKey:       "secret",
-		ActiveStates: []string{"Todo"},
-	}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
@@ -1021,10 +1006,7 @@ func TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure(t *testin
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{
-		APIKey:       "secret",
-		ActiveStates: []string{"Todo"},
-	}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
@@ -1053,7 +1035,7 @@ func TestTrackerClientListIssuesByStatesSurfacesMalformedTimestamp(t *testing.T)
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil {
@@ -1091,7 +1073,7 @@ func TestTrackerClientListIssuesByStatesDeduplicatesWithinSingleLabelScope(t *te
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
@@ -1123,7 +1105,7 @@ func TestTrackerClientListIssuesByStateLabelSkipsEmptyStateWithoutWantedStatesFi
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	issues, capped, err := client.listIssuesByStateLabel(context.Background(), "aiops/todo", "open", map[string]struct{}{}, map[string]struct{}{})
 	if err != nil {
@@ -1168,7 +1150,7 @@ func newSharedBlockerTrackerClient(t *testing.T, sources []Issue, blockerFetches
 		}
 	}))
 	t.Cleanup(server.Close)
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	return client
 }
@@ -1215,7 +1197,7 @@ func TestTrackerClientListIssuesByStatesRereadsBlockerOnNextTick(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	tick1, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
@@ -1254,7 +1236,7 @@ func TestCachedIssueByNumberNilCacheFallsBackToDirectFetch(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(Issue{ID: 103, Number: 3, Title: "blocker", HTMLURL: "https://gitea.local/o/r/issues/3", Labels: []Label{{Name: "aiops/todo"}}})
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	issue, found, resolved, err := client.cachedIssueByNumber(context.Background(), nil, 3)
@@ -1296,7 +1278,7 @@ func TestTrackerClientListIssuesByStatesRetriesBlockerAfterTransientError(t *tes
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
@@ -1353,7 +1335,7 @@ func TestTrackerClientListActiveIssuesKeepsIssueOnBlockerGlobalFailure(t *testin
 			}))
 			defer server.Close()
 
-			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
+			client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 			client.HTTP = server.Client()
 			if tc.blockerRequest != nil {
 				client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
@@ -1437,7 +1419,7 @@ func TestTrackerClientFetchIssueStatesByRefsCarriesRefreshedBlockers(t *testing.
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}, TerminalStates: []string{"Done", "Canceled"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}, TerminalStates: []string{"Done", "Canceled"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
@@ -1508,7 +1490,7 @@ func TestTrackerClientFetchIssueStatesNonTodoSkipsBlockerLookupFailure(t *testin
 				}
 			}))
 			defer server.Close()
-			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+			client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 			client.HTTP = server.Client()
 			if tc.blockerRequest != nil {
 				client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
@@ -1555,7 +1537,7 @@ func TestTrackerClientFetchIssueStatesBlockerRateLimitStopsLaterRefs(t *testing.
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
@@ -1588,7 +1570,7 @@ func TestTrackerClientFetchIssueStatesBlockerDeadlineStopsLaterRefs(t *testing.T
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
 		base: server.Client().Transport,
 		path: "/api/v1/repos/owner/repo/issues/9",
@@ -1627,7 +1609,7 @@ func TestTrackerClientFetchIssueStatesBlockerNumberMismatchFailsClosedWithoutCac
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
@@ -1669,7 +1651,7 @@ func TestTrackerClientFetchIssueStatesByRefsSkipsDeletedBlockers(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{Provider: map[string]any{"token": "secret"}, ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "555", Identifier: "#5"}})

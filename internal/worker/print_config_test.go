@@ -21,7 +21,7 @@ import (
 func TestPrintConfig_MasksTrackerAPIKey(t *testing.T) {
 	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin_super_secret_value")
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n  api_key: $AIOPS_TEST_LINEAR_KEY\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: $AIOPS_TEST_LINEAR_KEY\n    project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestPrintConfig_DefaultSource(t *testing.T) {
 func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 	dir := t.TempDir()
 	canary := "SHOULD_NOT_LEAK_xyz"
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex-app-server\ntracker:\n  kind: linear\n  project_slug: platform\n---\nFirst line of prompt template.\nSecond line includes canary " + canary + " in the middle.\nMore body...\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex-app-server\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nFirst line of prompt template.\nSecond line includes canary " + canary + " in the middle.\nMore body...\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestPrintConfig_RendersAgentTimeoutAsDurationString(t *testing.T) {
 // to the same duration.
 func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  timeout: 10m\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  timeout: 10m\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
 // and overrides took effect.
 func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_retry_backoff_ms: 45000\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_retry_backoff_ms: 45000\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 
 func TestPrintConfig_ExposesPollingInterval(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\npolling:\n  interval_ms: 12345\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\npolling:\n  interval_ms: 12345\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestPrintConfig_ExposesPollingInterval(t *testing.T) {
 
 func TestPrintConfig_ExposesMaxContinuationTurns(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_continuation_turns: 7\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_continuation_turns: 7\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestPrintConfig_ExposesMaxContinuationTurns(t *testing.T) {
 // reported as normal shadow workflow sources.
 func TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write root: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestPrintConfig_MasksRepoCloneURLUserinfo(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: " + tc.clone + "\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+			body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: " + tc.clone + "\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n---\nprompt\n"
 			if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
@@ -431,7 +431,7 @@ func TestPrintConfig_MasksSandboxCredentialFiles(t *testing.T) {
 			} else {
 				sandbox = ""
 			}
-			body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n" + sandbox + "---\nprompt\n"
+			body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n" + sandbox + "---\nprompt\n"
 			if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
@@ -473,7 +473,7 @@ func TestPrintConfig_MasksSandboxCredentialFiles(t *testing.T) {
 // sandbox posture, not just stare at silence.
 func TestPrintConfig_SandboxVisibleInConfigView(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\nsandbox:\n  enabled: true\n  backend: bubblewrap\n  network: none\n  env_allowlist:\n    - HOME\n    - PATH\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\nsandbox:\n  enabled: true\n  backend: bubblewrap\n  network: none\n  env_allowlist:\n    - HOME\n    - PATH\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -570,7 +570,7 @@ func runPrintConfigProvenance(t *testing.T, body string, portOverride *int) (con
 // validFrontMatter wraps the minimal valid front matter (repo + linear
 // tracker) around the supplied extra block so loader validation passes.
 func validFrontMatter(extra string) string {
-	return "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n" + extra + "---\nprompt\n"
+	return "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: test-linear-token\n    project_slug: platform\n" + extra + "---\nprompt\n"
 }
 
 // TestPrintConfig_WorkspaceRootProvenance pins the #375 acceptance
@@ -790,7 +790,7 @@ func TestPrintConfig_ProvenanceDoesNotLeakSecrets(t *testing.T) {
 	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin_super_secret_value")
 	t.Setenv(workspaceRootEnv, "/env/ws")
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n  api_key: $AIOPS_TEST_LINEAR_KEY\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  provider:\n    api_key: $AIOPS_TEST_LINEAR_KEY\n    project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}

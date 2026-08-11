@@ -73,10 +73,7 @@ func TestGitHubClientListIssuesByStatesMapsRepositoryIssues(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:       "test-token",
-		ActiveStates: []string{"priority:p2"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"priority:p2"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListActiveIssues(context.Background())
@@ -222,9 +219,7 @@ func TestGitHubClientListIssuesByStatesPopulatesBlockedByFromNativeAndBodyFallba
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:         "test-token",
-		ActiveStates:   []string{"aiops:todo"},
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"},
 		TerminalStates: []string{"done", "closed"},
 	}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
@@ -289,9 +284,7 @@ func TestGitHubClientListIssuesByStatesFailsClosedWhenNativeBlockersAreIncomplet
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:         "test-token",
-		ActiveStates:   []string{"aiops:todo"},
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"},
 		TerminalStates: []string{"done", "closed"},
 	}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
@@ -335,10 +328,7 @@ func TestGitHubClientListIssuesByStatesSkipsBlockerLookupForNonTodoStates(t *tes
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:         "test-token",
-		TerminalStates: []string{"done"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"done"})
@@ -381,10 +371,7 @@ func TestGitHubClientListIssuesByStatesReturnsErrorWhenNativeBlockerLookupIsRate
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:       "test-token",
-		ActiveStates: []string{"aiops:todo"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListActiveIssues(context.Background())
@@ -432,10 +419,7 @@ func TestGitHubClientListIssuesByStatesOmitsBodyFallbackOnLookupFailure(t *testi
 			}))
 			defer srv.Close()
 
-			client := NewGitHubClient(workflow.TrackerConfig{
-				APIKey:       "test-token",
-				ActiveStates: []string{"aiops:todo"},
-			}, srv.URL, "acme", "api")
+			client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 			client.HTTP = srv.Client()
 			client.Logf = func(format string, args ...any) {
 				logs = append(logs, fmt.Sprintf(format, args...))
@@ -498,10 +482,7 @@ func TestGitHubClientListIssuesByStatesOmitsBodyFallbackWhenLookupTransportFails
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:       "test-token",
-		ActiveStates: []string{"aiops:todo"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	base := srv.Client().Transport
 	client.HTTP = &http.Client{Transport: githubPathErrorTransport{
 		base: base,
@@ -579,10 +560,7 @@ func TestGitHubClientListIssuesByStatesChunksNativeBlockerLookups(t *testing.T) 
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:       "test-token",
-		ActiveStates: []string{"aiops:todo"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListActiveIssues(context.Background())
@@ -658,10 +636,7 @@ func TestGitHubClientListIssuesByStatesSkipsIssuesClaimedByOpenPR(t *testing.T) 
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:       "test-token",
-		ActiveStates: []string{"priority:p2"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"priority:p2"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListActiveIssues(context.Background())
@@ -736,7 +711,7 @@ func TestGitHubClientListIssuesByStatesErrorsWhenStateCollectionOverflows(t *tes
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", PaginationMaxPages: 1}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token", "pagination_max_pages": 1}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	client.Logf = func(format string, args ...any) {
 		logs = append(logs, fmt.Sprintf(format, args...))
@@ -805,7 +780,7 @@ func TestGitHubClientListIssuesByStatesErrorsWhenOpenPRPaginationOverflows(t *te
 			}))
 			defer srv.Close()
 
-			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", PaginationMaxPages: 1}, srv.URL, "acme", "api")
+			client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token", "pagination_max_pages": 1}}, srv.URL, "acme", "api")
 			client.HTTP = srv.Client()
 			issues, err := client.ListIssuesByStates(context.Background(), tc.states)
 			if !errors.Is(err, ErrIssueListingCapped) {
@@ -854,7 +829,7 @@ func TestGitHubClientOpenPRClaimScanAllowsEmptyProbePage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", PaginationMaxPages: 1}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token", "pagination_max_pages": 1}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"open"})
 	if err != nil {
@@ -891,7 +866,7 @@ func TestGitHubClientListIssuesByStatesMapsClosedState(t *testing.T) {
 		}})
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"closed"})
@@ -905,10 +880,10 @@ func TestGitHubClientListIssuesByStatesMapsClosedState(t *testing.T) {
 
 func TestGitHubClientRequiresTokenOwnerAndRepo(t *testing.T) {
 	client := NewGitHubClient(workflow.TrackerConfig{}, "https://api.github.test", "acme", "api")
-	if _, err := client.ListIssuesByStates(context.Background(), []string{"priority:p2"}); err == nil || !strings.Contains(err.Error(), "GitHub tracker api_key") {
+	if _, err := client.ListIssuesByStates(context.Background(), []string{"priority:p2"}); err == nil || !strings.Contains(err.Error(), "GitHub tracker token") {
 		t.Fatalf("missing token error = %v", err)
 	}
-	client = NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, "https://api.github.test", "", "api")
+	client = NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, "https://api.github.test", "", "api")
 	if _, err := client.ListIssuesByStates(context.Background(), []string{"priority:p2"}); err == nil || !strings.Contains(err.Error(), "repo.owner and repo.name") {
 		t.Fatalf("missing owner error = %v", err)
 	}
@@ -968,9 +943,7 @@ func TestGitHubClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:         "test-token",
-		ActiveStates:   []string{"priority:p2"},
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"priority:p2"},
 		TerminalStates: []string{"done"},
 	}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
@@ -1020,7 +993,7 @@ func TestGitHubClientFetchIssueStatesByRefsOutcomeMatrixAndPartialError(t *testi
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	client.cacheIssueNumber("202", 2)
 	client.cacheIssueNumber("303", 3)
@@ -1071,7 +1044,7 @@ func TestGitHubClientFetchIssueStatesPayloadNumberMismatchStaysUnknown(t *testin
 		_ = json.NewEncoder(w).Encode(githubIssue{ID: 101, Number: 2, State: "open", Labels: []githubLabel{}})
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	client.cacheIssueNumber("101", 1)
 
@@ -1114,7 +1087,7 @@ func TestGitHubClientFetchIssueStatesPartialPayloadAndEmptyLabels(t *testing.T) 
 				_, _ = io.WriteString(w, tc.payload)
 			}))
 			defer srv.Close()
-			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+			client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, srv.URL, "acme", "api")
 			client.HTTP = srv.Client()
 			client.cacheIssueNumber("101", 1)
 
@@ -1138,7 +1111,7 @@ func TestGitHubClientFetchIssueStatesTodoRequiresNodeIDOnlyWithBlockers(t *testi
 		_, _ = io.WriteString(w, `{"id":101,"number":1,"state":"open","labels":[{"name":"todo"}]}`)
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	ref := IssueRef{ID: "101", Identifier: "#1"}
 
@@ -1165,7 +1138,7 @@ func TestGitHubClientFetchIssueStatesTodoRequiresBodyOnlyWithBlockers(t *testing
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	ref := IssueRef{ID: "101", Identifier: "#1"}
 
@@ -1201,7 +1174,7 @@ func TestGitHubClientFetchIssueStatesTodoAcceptsExplicitEmptyBody(t *testing.T) 
 				}
 			}))
 			defer srv.Close()
-			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
+			client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
 			client.HTTP = srv.Client()
 			ref := IssueRef{ID: "101", Identifier: "#1"}
 
@@ -1226,7 +1199,7 @@ func TestGitHubClientFetchIssueStatesIncompletePayloadPreservesLaterCurrent(t *t
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
@@ -1245,7 +1218,7 @@ func TestGitHubClientFetchIssueStatesRateLimitStopsLaterRefs(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
@@ -1268,7 +1241,7 @@ func TestGitHubClientFetchIssueStatesRequestDeadlineStopsLaterRefs(t *testing.T)
 		_, _ = io.WriteString(w, `{"id":202,"number":2,"state":"open","labels":[]}`)
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, srv.URL, "acme", "api")
 	client.HTTP = &http.Client{Transport: githubPathErrorTransport{
 		base: srv.Client().Transport,
 		path: "/repos/acme/api/issues/1",
@@ -1294,7 +1267,7 @@ func TestGitHubClientFetchIssueStatesUnknownForInconsistentCachedRefOutcome(t *t
 		http.NotFound(w, r)
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	tests := []struct {
 		name string
@@ -1337,7 +1310,7 @@ func TestGitHubClientFetchIssueStatesOutcomeBlockerFailureOnlyInvalidatesTodo(t 
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, ActiveStates: []string{"todo"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 	refs := []IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}}
 
@@ -1391,10 +1364,7 @@ func TestGitHubClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t 
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:         "test-token",
-		TerminalStates: []string{"Done"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, TerminalStates: []string{"Done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "987654", Identifier: "#7"}})
@@ -1483,7 +1453,7 @@ func TestGitHubClientFetchIssueStatesByIDsRequiresToken(t *testing.T) {
 }
 
 func TestGitHubClientFetchIssueStatesByIDsEmptyInputReturnsEmptyMap(t *testing.T) {
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, "https://api.github.test", "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "token"}}, "https://api.github.test", "acme", "api")
 	states, err := client.FetchIssueStatesByIDs(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs nil: %v", err)
@@ -1565,9 +1535,7 @@ func TestGitHubClientFetchIssueStatesByRefsPopulatesBlockedByAndDropsDeletedFall
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:         "test-token",
-		ActiveStates:   []string{"aiops:todo"},
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"},
 		TerminalStates: []string{"closed", "done"},
 	}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
@@ -1615,7 +1583,7 @@ func TestGitHubClientFetchIssueStatesByRefsRejectsMissingBlockedByPayload(t *tes
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1658,7 +1626,7 @@ func TestGitHubClientFetchIssueStatesByRefsRejectsDuplicateBlockerSourceNode(t *
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1685,7 +1653,7 @@ func TestGitHubClientFetchIssueStatesByRefsRejectsNativeSourceNumberMismatch(t *
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1724,7 +1692,7 @@ func TestGitHubClientFetchIssueStatesByRefsRejectsUnexpectedOrMissingNativeSourc
 				}
 			}))
 			defer srv.Close()
-			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+			client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 			client.HTTP = srv.Client()
 
 			states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1786,7 +1754,7 @@ func TestGitHubClientFetchIssueStatesBodyFallbackHaltStopsLaterBlockerLookups(t 
 				}
 			}))
 			defer srv.Close()
-			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+			client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 			client.HTTP = srv.Client()
 			if tc.transport != nil {
 				client.HTTP = &http.Client{Transport: githubPathErrorTransport{base: srv.Client().Transport, path: "/repos/acme/api/issues/21", err: tc.transport}}
@@ -1825,7 +1793,7 @@ func TestGitHubClientFetchIssueStatesBodyFallbackFailureUsesPlaceholder(t *testi
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1855,7 +1823,7 @@ func TestGitHubClientFetchIssueStatesBodyFallbackNumberMismatchFailsClosedWithou
 		}
 	}))
 	defer srv.Close()
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1895,10 +1863,7 @@ func TestGitHubClientFetchIssueStatesWithoutBlockersByRefsSkipsBlockerHydration(
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:       "test-token",
-		ActiveStates: []string{"aiops:todo"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesWithoutBlockersByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1945,10 +1910,7 @@ func TestGitHubClientFetchIssueStatesByRefsSkipsBlockerLookupForNonTodoStates(t 
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{
-		APIKey:         "test-token",
-		TerminalStates: []string{"done"},
-	}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
@@ -1985,7 +1947,7 @@ func TestGitHubClientFetchIssueStatesByIDsSurfacesNon404Errors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"priority:p2"}}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}, ActiveStates: []string{"priority:p2"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	if _, err := client.ListActiveIssues(context.Background()); err != nil {
@@ -2049,7 +2011,7 @@ func TestGitHubClientListIssuesForStateKeepsClaimedNonOpenIssue(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"all"})
@@ -2092,7 +2054,7 @@ func TestGitHubClientListIssuesForStateSurfacesMapError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"open"})
@@ -2131,7 +2093,7 @@ func TestGitHubClientListIssuesForStateDeduplicatesAcrossStates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{Provider: map[string]any{"token": "test-token"}}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"open", "closed"})

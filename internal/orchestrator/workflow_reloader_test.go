@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,6 +112,51 @@ func TestWorkflowRuntimeReloadSuccessAtomicallySwapsConfigAndEmitsEvent(t *testi
 	}
 	if got := emitter.count(task.EventWorkflowReloaded); got != 1 {
 		t.Fatalf("workflow_reload event count = %d, want 1", got)
+	}
+}
+
+func TestWorkflowRuntimeReloadPreservesOpaqueProviderKeys(t *testing.T) {
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+
+	body := `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+tracker:
+  kind: linear
+  provider:
+    api_key: lin_dummy_for_test
+    project_slug: platform
+    endpoint: https://linear.example.test/graphql
+    future_scope:
+      board: delivery
+      flags: [one, two]
+---
+Prompt body
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write reloaded workflow: %v", err)
+	}
+	if err := runtime.ReloadOnce(context.Background()); err != nil {
+		t.Fatalf("reload once: %v", err)
+	}
+
+	provider := runtime.Current().Workflow.Config.Tracker.Provider
+	want := map[string]any{"board": "delivery", "flags": []any{"one", "two"}}
+	if got := provider["future_scope"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("reloaded tracker.provider.future_scope = %#v; want %#v", got, want)
+	}
+	if got := provider["endpoint"]; got != "https://linear.example.test/graphql" {
+		t.Fatalf("reloaded tracker.provider.endpoint = %#v; want adapter endpoint", got)
 	}
 }
 
@@ -795,8 +841,8 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  clone_url: https://github.com/xrf9268-hue/aiops-platform.git\n" +
 		"tracker:\n" +
 		"  kind: " + trackerKind + "\n" +
-		"  api_key: lin_dummy_for_test\n" +
-		reloadTestLinearProjectSlugYAML(trackerKind) +
+		"  provider:\n" +
+		reloadTestProviderYAML(trackerKind) +
 		"  active_states: [\"" + activeState + "\"]\n" +
 		"  terminal_states: [\"Done\"]\n" +
 		"polling:\n" +
@@ -814,11 +860,11 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 	}
 }
 
-func reloadTestLinearProjectSlugYAML(trackerKind string) string {
-	if trackerKind != "linear" {
-		return ""
+func reloadTestProviderYAML(trackerKind string) string {
+	if trackerKind == "linear" {
+		return "    api_key: lin_dummy_for_test\n    project_slug: platform\n"
 	}
-	return "  project_slug: platform\n"
+	return "    token: tracker_dummy_for_test\n"
 }
 
 type reloadWorkflowTestConfig struct {

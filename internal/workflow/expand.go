@@ -28,17 +28,6 @@ func defaultAgentMaxContinuationTurns(cfg *Config, hasFrontMatter bool, front []
 
 func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nolint:gocognit,funlen // baseline (#521)
 	var err error
-	if envName, ok := explicitEnvReferenceName(cfg.Tracker.APIKey); ok {
-		cfg.Tracker.apiKeyEnvVar = envName
-	} else {
-		cfg.Tracker.apiKeyEnvVar = ""
-	}
-	if cfg.Tracker.APIKey, err = resolveExplicitEnv("tracker.api_key", cfg.Tracker.APIKey); err != nil {
-		return err
-	}
-	if cfg.Tracker.Endpoint, err = resolveExplicitEnv("tracker.endpoint", cfg.Tracker.Endpoint); err != nil {
-		return err
-	}
 	if err := expandRepoConfig("repo.clone_url", &cfg.Repo); err != nil {
 		return err
 	}

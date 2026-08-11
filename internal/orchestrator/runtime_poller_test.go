@@ -359,7 +359,8 @@ func TestRuntimeDispatcherCleanupRejectsTrackerAPIKeyValuePassthrough(t *testing
 	t.Setenv("AIOPS_TRACKER_SECRET", "active-tracker-secret")
 	marker := filepath.Join(root, "hook-env")
 	cfg := workflow.DefaultConfig()
-	cfg.Tracker.APIKey = "active-tracker-secret"
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.Provider = map[string]any{"api_key": "active-tracker-secret", "project_slug": "platform"}
 	cfg.Hooks = workflow.WorkspaceHooks{
 		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
 		BeforeRemove: workflow.WorkspaceHook{Commands: []string{

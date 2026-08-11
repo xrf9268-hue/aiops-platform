@@ -7,13 +7,14 @@ repo:
 
 tracker:
   kind: github
-  api_key: $GITHUB_TOKEN
+  provider:
+    token: $GITHUB_TOKEN
+    # Optional: raise this for very large repositories. A cap hit skips only
+    # the overflowing state/label scan and logs the diagnostic.
+    # pagination_max_pages: 25
   # GitHub tracker states map to issue labels unless the state is open/closed/all.
   # This dogfood queue processes only issues explicitly labeled aiops:ready.
   # Priority labels are triage metadata, not permission to run an issue.
-  # Optional: raise this for very large repositories. A cap hit skips only the
-  # overflowing state/label scan and logs the diagnostic.
-  # pagination_max_pages: 25
   active_states:
     - aiops:ready
   terminal_states:

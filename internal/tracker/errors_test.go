@@ -13,14 +13,14 @@ import (
 
 func TestLinearClientSurfacesTrackerErrorCategories(t *testing.T) {
 	t.Run("missing api key", func(t *testing.T) {
-		_, err := NewLinearClient(workflow.TrackerConfig{ProjectSlug: "aiops"}).ListIssuesByStates(context.Background(), []string{"Todo"})
+		_, err := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"project_slug": "aiops"}}).ListIssuesByStates(context.Background(), []string{"Todo"})
 		if !errors.Is(err, ErrMissingTrackerAPIKey) {
 			t.Fatalf("ListIssuesByStates missing key error = %T %[1]v, want ErrMissingTrackerAPIKey", err)
 		}
 	})
 
 	t.Run("missing project slug", func(t *testing.T) {
-		_, err := NewLinearClient(workflow.TrackerConfig{APIKey: "key"}).ListIssuesByStates(context.Background(), []string{"Todo"})
+		_, err := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "key"}}).ListIssuesByStates(context.Background(), []string{"Todo"})
 		if !errors.Is(err, ErrMissingTrackerProjectSlug) {
 			t.Fatalf("ListIssuesByStates missing slug error = %T %[1]v, want ErrMissingTrackerProjectSlug", err)
 		}
@@ -85,7 +85,7 @@ func linearTestClientForCategory(t *testing.T, handler http.Handler) *LinearClie
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	client := NewLinearClient(workflow.TrackerConfig{APIKey: "key", ProjectSlug: "aiops"})
+	client := NewLinearClient(workflow.TrackerConfig{Provider: map[string]any{"api_key": "key", "project_slug": "aiops"}})
 	client.BaseURL = srv.URL
 	client.HTTP = srv.Client()
 	return client

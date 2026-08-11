@@ -146,10 +146,10 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	cfg.Repo.CloneURL = cloneURL
 	cfg.Repo.DefaultBranch = "main"
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.APIKey = bed.gitea.botToken
+	cfg.Tracker.Provider = map[string]any{"token": bed.gitea.botToken}
 	cfg.Tracker.ActiveStates = serviceWorkflow.Config.Tracker.ActiveStates
 	cfg.Tracker.TerminalStates = serviceWorkflow.Config.Tracker.TerminalStates
-	serviceWorkflow.Config.Tracker.APIKey = bed.gitea.botToken
+	serviceWorkflow.Config.Tracker.Provider = map[string]any{"token": bed.gitea.botToken}
 	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
 

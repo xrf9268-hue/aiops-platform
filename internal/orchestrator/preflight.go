@@ -27,12 +27,6 @@ func validateDispatchPreflight(cfg workflow.Config) error {
 	} else if !workflow.IsSupportedTrackerKind(kind) {
 		errs = append(errs, fmt.Errorf("tracker.kind unsupported: %q", kind))
 	}
-	if strings.TrimSpace(cfg.Tracker.APIKey) == "" {
-		errs = append(errs, errors.New("tracker.api_key empty after $VAR resolution"))
-	}
-	if kind == "linear" && strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" {
-		errs = append(errs, errors.New("tracker.project_slug required for linear"))
-	}
 	if strings.TrimSpace(cfg.Codex.Command) == "" {
 		errs = append(errs, errors.New("codex.command empty"))
 	}

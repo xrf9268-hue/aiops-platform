@@ -11,7 +11,7 @@ to the worker process's environment — `LINEAR_API_KEY`, `GITHUB_TOKEN`,
 
 SPEC §15.4 frames hooks as "fully trusted configuration", but §15.5
 recommends narrowing client-side credentials to the minimum the
-workflow needs. Inheriting the agent's tracker API key into an
+workflow needs. Inheriting the selected adapter's tracker secret into an
 `after_create` hook violates that recommendation: a hook does not need
 the tracker token to do its job, and a malicious or buggy WORKFLOW.md
 could `env > /tmp/dump` and exfiltrate.
@@ -61,8 +61,8 @@ config-validation noise.
 `env_passthrough` is still subject to the tracker/API credential deny
 policy shared with agent subprocess env construction. Hard-coded tracker
 token names such as `LINEAR_API_KEY`, `GITHUB_TOKEN`, and `GITEA_TOKEN`,
-the configured `tracker.api_key` env-var name, and any env var whose
-current value equals the configured `tracker.api_key` are dropped even
+the exact env name referenced by the selected adapter's provider secret, and
+any env var whose current value equals that provider secret are dropped even
 when listed explicitly. Tracker credentials stay behind orchestrator-owned
 tools/proxies; hooks should receive narrower purpose-built credentials
 instead.
@@ -79,7 +79,7 @@ in `WorkspaceConfig` (config.go:307).
 Existing workflows that depended on a specific env var being inherited
 must add it to `hooks.env_passthrough`. Concretely: any hook that read
 `$LINEAR_API_KEY`, `$GITHUB_TOKEN`, `$GITEA_TOKEN`, or a configured
-`tracker.api_key` value directly will now see an empty string even if that
+adapter-declared provider secret directly will now see an empty string even if that
 variable is listed in passthrough. The workflow loader does not flag this
 specific deny-layer drop — it's a runtime behavior change visible in hook
 output.
@@ -112,5 +112,5 @@ it.
    tracker credential denial sees the effective tracker configuration.
 5. Tests: hook subprocess env does not contain `LINEAR_API_KEY` by default;
    explicit passthrough surfaces a named non-secret var; configured
-   `tracker.api_key` values are still denied on the RunTask and cleanup
+   adapter-declared provider secret values are still denied on the RunTask and cleanup
    production paths.

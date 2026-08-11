@@ -32,8 +32,8 @@ func TestBuildReportMockModeCatchesMissingLinearKeyDuringWorkflowLoad(t *testing
 	if check.Status != Fail {
 		t.Fatalf("Workflow status = %s; want FAIL", check.Status)
 	}
-	if !strings.Contains(check.Detail, "missing_tracker_api_key") {
-		t.Fatalf("detail = %q; want missing_tracker_api_key", check.Detail)
+	if !strings.Contains(check.Detail, "missing_tracker_secret") || !strings.Contains(check.Detail, "tracker.provider.api_key") {
+		t.Fatalf("detail = %q; want stable missing Linear provider secret error", check.Detail)
 	}
 }
 
@@ -573,7 +573,7 @@ func TestBuildReportRealModeUsesCustomCodexCommandForAppServerProbe(t *testing.T
 	wrapper := installFakeCodexWrapper(t)
 	// The no-failure sweep below needs the real-mode Gitea tracker preflight
 	// (#781) to succeed, so supply an api_key and a stub endpoint.
-	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server", "\n  api_key: token\n  endpoint: "+trackerPreflightStubURL(t))
+	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server", "\n    base_url: "+trackerPreflightStubURL(t))
 	report := BuildReport(context.Background(), Options{
 		WorkflowPath: path,
 		Mode:         "real",
@@ -677,9 +677,9 @@ func TestBuildReportRealModeFailsWithoutGoModuleForTargetedTest(t *testing.T) {
 func TestBuildReportRealModeWarnsWithoutExplicitGoTestDir(t *testing.T) {
 	installFakeGitOnly(t)
 	// The HasFailures assertion below needs the real-mode Gitea tracker
-	// preflight (#781) to succeed, so point tracker.endpoint at a stub.
+	// preflight (#781) to succeed, so point tracker.provider endpoint at a stub.
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeWorkflowBody(t, "gitea", "token", "mock", "\n  endpoint: "+trackerPreflightStubURL(t)),
+		WorkflowPath: writeWorkflowBody(t, "gitea", "token", "mock", "\n    base_url: "+trackerPreflightStubURL(t)),
 		Mode:         "real",
 		Runner:       fakeRealRunner,
 	})
@@ -961,7 +961,7 @@ func TestRunReturnsFailureWhenReportHasFailures(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("Run exit code = %d; want 1", code)
 	}
-	if !strings.Contains(out.String(), "FAIL Workflow") || !strings.Contains(out.String(), "missing_tracker_api_key") {
+	if !strings.Contains(out.String(), "FAIL Workflow") || !strings.Contains(out.String(), "missing_tracker_secret") {
 		t.Fatalf("doctor output missing workflow credential failure:\n%s", out.String())
 	}
 }
@@ -1076,7 +1076,7 @@ func trackerPreflightStubURL(t *testing.T) string {
 
 func writeWorkflowWithEndpoint(t *testing.T, endpoint, agent string) string {
 	t.Helper()
-	body := "\n  endpoint: " + endpoint
+	body := "\n    endpoint: " + endpoint
 	return writeWorkflowBody(t, "linear", "$AIOPS_TEST_LINEAR_KEY", agent, body)
 }
 
@@ -1091,8 +1091,9 @@ repo:
   clone_url: ` + cloneURL + `
 tracker:
   kind: linear
-  api_key: $AIOPS_TEST_LINEAR_KEY
-  project_slug: platform
+  provider:
+    api_key: $AIOPS_TEST_LINEAR_KEY
+    project_slug: platform
 agent:
   default: mock
 ---
@@ -1114,7 +1115,9 @@ repo:
   name: r
   clone_url: https://example.invalid/o/r.git
 tracker:
-  kind: gitea` + extraTracker + `
+  kind: gitea
+  provider:
+    token: token` + defaultGiteaProviderURL(t, extraTracker) + `
 agent:
   default: codex-app-server
 codex:
@@ -1140,8 +1143,9 @@ repo:
   clone_url: https://github.com/xrf9268-hue/aiops-platform.git
 tracker:
   kind: gitea
-  api_key: token
-  endpoint: ` + endpoint + `
+  provider:
+    token: token
+    base_url: ` + endpoint + `
 agent:
   default: ` + agent + `
 ---
@@ -1157,14 +1161,14 @@ func writeWorkflowBody(t *testing.T, trackerKind, apiKey, agent, extraTracker st
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
-	trackerExtra := extraTracker
+	secretKey := "token"
+	providerExtra := extraTracker
 	switch trackerKind {
 	case "linear":
-		trackerExtra = "\n  project_slug: platform" + extraTracker
+		secretKey = "api_key"
+		providerExtra = "\n    project_slug: platform" + extraTracker
 	case "gitea":
-		if !strings.Contains(extraTracker, "endpoint:") {
-			trackerExtra = "\n  endpoint: " + trackerPreflightStubURL(t) + extraTracker
-		}
+		providerExtra = defaultGiteaProviderURL(t, extraTracker)
 	}
 	body := `---
 repo:
@@ -1173,8 +1177,8 @@ repo:
   clone_url: https://example.invalid/o/r.git
 tracker:
   kind: ` + trackerKind + `
-  api_key: ` + apiKey + `
-  ` + strings.TrimPrefix(trackerExtra, "\n  ") + `
+  provider:
+    ` + secretKey + `: ` + apiKey + providerExtra + `
 agent:
   default: ` + agent + `
 ---
@@ -1184,6 +1188,13 @@ prompt
 		t.Fatalf("write workflow: %v", err)
 	}
 	return path
+}
+
+func defaultGiteaProviderURL(t *testing.T, extra string) string {
+	if strings.Contains(extra, "base_url:") {
+		return extra
+	}
+	return "\n    base_url: " + trackerPreflightStubURL(t) + extra
 }
 
 func writeGoModule(t *testing.T, version string) string {

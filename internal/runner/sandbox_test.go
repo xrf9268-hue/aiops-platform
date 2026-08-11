@@ -228,7 +228,7 @@ func TestScopedEnvRejectsTrackerAPIKeyValue(t *testing.T) {
 	t.Setenv("AIOPS_TEST_TRACKER_TOKEN", "tracker-secret")
 
 	env := scopedEnv([]string{"AIOPS_TEST_TRACKER_TOKEN"}, workflow.Config{
-		Tracker: workflow.TrackerConfig{APIKey: "tracker-secret"},
+		Tracker: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "tracker-secret", "project_slug": "platform"}},
 	})
 	if envContains(env, "AIOPS_TEST_TRACKER_TOKEN=tracker-secret") {
 		t.Fatalf("scoped env leaked tracker API key value: %q", env)

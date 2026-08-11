@@ -256,7 +256,7 @@ func TestLinearWorkpadAcceptsSchemaNestedVariables(t *testing.T) {
 
 func TestLinearWorkpadToolMetadataDoesNotExposeLinearToken(t *testing.T) {
 	const token = "lin_super_secret_workpad_token"
-	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: token}}})
+	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": token}, Kind: "linear"}}})
 	tool, ok := tools.Lookup("linear_ai_workpad")
 	if !ok {
 		t.Fatalf("linear_ai_workpad tool not advertised; tools=%#v", tools.Names())

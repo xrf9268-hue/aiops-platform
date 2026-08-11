@@ -723,7 +723,7 @@ func TestReconcileStartupBeforeRemoveRejectsTrackerAPIKeyValuePassthrough(t *tes
 		TerminalStates:     []string{"Done"},
 		TrackerKind:        "linear",
 		Tracker:            fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Done"}}},
-		WorkflowConfig:     workflow.Config{Tracker: workflow.TrackerConfig{APIKey: "reconcile-tracker-secret"}},
+		WorkflowConfig:     workflow.Config{Tracker: workflow.TrackerConfig{Kind: "linear", Provider: map[string]any{"api_key": "reconcile-tracker-secret", "project_slug": "platform"}}},
 		HookEnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
 		BeforeRemoveHook: workflow.WorkspaceHook{Commands: []string{
 			`printf '<%s><%s>' "$EXTRA_BUILD_VAR" "$AIOPS_TRACKER_SECRET" > ` + shellQuote(marker),

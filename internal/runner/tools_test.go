@@ -49,10 +49,7 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 
 	token := "lin_super_secret_test_token"
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
-		Tracker: workflow.TrackerConfig{
-			Kind:   "linear",
-			APIKey: token,
-		},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": token}, Kind: "linear"},
 		Codex: workflow.CommandConfig{
 			LinearGraphQL: workflow.LinearGraphQLConfig{AllowMutations: true},
 		},
@@ -143,7 +140,7 @@ func TestDynamicToolsDoNotExposeLinearToolsWithoutLinearToken(t *testing.T) {
 	for _, wf := range []workflow.Workflow{
 		{},
 		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Kind: "linear"}}},
-		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Kind: "gitea", APIKey: "token"}}},
+		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": "token"}, Kind: "gitea"}}},
 	} {
 		tools := DynamicToolsForWorkflow(wf)
 		for _, name := range []string{"linear_graphql", "linear_ai_workpad"} {
@@ -1053,7 +1050,7 @@ func TestLinearGraphQLWorkpadCallsBypassMutationGate(t *testing.T) {
 	defer httpServer.Close()
 
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "token", Endpoint: httpServer.URL},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "token", "endpoint": httpServer.URL}, Kind: "linear"},
 		// Deliberately leave LinearGraphQL at its zero value: mutations
 		// stay blocked for the agent-visible tool but the workpad must
 		// still post comments through the harness-internal path.
@@ -1088,7 +1085,7 @@ func TestDynamicToolsUseLinearTrackerEndpoint(t *testing.T) {
 	defer httpServer.Close()
 
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "token", Endpoint: httpServer.URL},
+		Tracker: workflow.TrackerConfig{Provider: map[string]any{"api_key": "token", "endpoint": httpServer.URL}, Kind: "linear"},
 	}})
 	tool, ok := tools.Lookup("linear_graphql")
 	if !ok {
@@ -1100,10 +1097,30 @@ func TestDynamicToolsUseLinearTrackerEndpoint(t *testing.T) {
 		t.Fatalf("linear_graphql call: %v", err)
 	}
 	if !toolResultSucceeded(result) {
-		t.Fatalf("linear_graphql result = %s; want success through tracker.endpoint", result)
+		t.Fatalf("linear_graphql result = %s; want success through tracker.provider.endpoint", result)
 	}
 	if calls != 1 {
-		t.Fatalf("tracker.endpoint HTTP calls = %d; want 1", calls)
+		t.Fatalf("tracker.provider.endpoint HTTP calls = %d; want 1", calls)
+	}
+}
+
+func TestCurrentIssueGuardUsesLinearProviderTeamKey(t *testing.T) {
+	cfg := workflow.TrackerConfig{
+		Kind:     "linear",
+		Provider: map[string]any{"api_key": "token", "project_slug": "delivery", "team_key": "ENG"},
+	}
+	profile := linearToolProfile(cfg)
+	if profile == nil {
+		t.Fatal("linearToolProfile = nil; want adapter profile")
+	}
+	guard, ok := currentIssueGuardFromOptions(dynamicToolOptions{
+		currentIssueID: "issue-id",
+		currentIssueRefresher: func(context.Context) (IssueStateSnapshot, error) {
+			return IssueStateSnapshot{}, nil
+		},
+	}, cfg, profile.TeamKey)
+	if !ok || guard.teamKey != "ENG" {
+		t.Fatalf("current issue guard = %+v, ok=%v; want provider team_key ENG", guard, ok)
 	}
 }
 

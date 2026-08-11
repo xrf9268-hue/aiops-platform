@@ -57,7 +57,7 @@ func TestResolve_NoRootWorkflowIgnoresLegacyFallbacks(t *testing.T) {
 // as Source=file with the relative path "WORKFLOW.md".
 func TestResolve_FindsRootWorkflowFile(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n---\nprompt body\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n  provider:\n    token: test-gitea-token\n---\nprompt body\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestResolve_PromptOnlyFile(t *testing.T) {
 // them as shadowed candidates.
 func TestResolve_DoesNotReportShadowedLegacyPaths(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n  provider:\n    token: test-gitea-token\n---\nprompt\n"
 	for _, rel := range []string{"WORKFLOW.md", ".aiops/WORKFLOW.md", ".github/WORKFLOW.md"} {
 		abs := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {

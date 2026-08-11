@@ -201,10 +201,10 @@ The current Go implementation provides these safety controls:
   `codex.env_passthrough`, `claude.env_passthrough`, or `hooks.env_passthrough`;
   real-Codex workflow templates that set `shell_environment_policy.inherit=all`
   also make those intentionally passed variables visible to Codex-launched shell
-  tools. Agent and hook passthrough reject tracker/repo API token names, the
-  configured `tracker.api_key` env-var name, and env vars whose current value
-  equals the configured `tracker.api_key`, so those credentials stay behind
-  orchestrator-owned tools. See
+  tools. Agent and hook passthrough reject every adapter-declared tracker
+  secret env name, the exact env name referenced by the selected provider, and
+  env vars whose current value equals the provider secret, so those credentials
+  stay behind orchestrator-owned tools. See
   [`docs/design/hook-verify-env-allowlist.md`](design/hook-verify-env-allowlist.md);
 - allow-listed redaction of Codex `turn/failed`, `turn/cancelled`, and failed
   `turn/completed` protocol payloads: returned error strings and

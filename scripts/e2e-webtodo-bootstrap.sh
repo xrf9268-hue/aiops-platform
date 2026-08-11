@@ -93,8 +93,8 @@ render_workflow() {
         printf '  owner: %s\n' "$repo_owner" ;;
       "  name: your-repo")
         printf '  name: %s\n' "$repo_name" ;;
-      "  endpoint: http://gitea.local")
-        printf '  endpoint: %s\n' "$gitea_url" ;;
+      "    base_url: http://gitea.local")
+        printf '    base_url: %s\n' "$gitea_url" ;;
       "  clone_url: \$MAKER_CLONE_URL  #"*)
         printf '  clone_url: $MAKER_CLONE_URL  # set in env.local\n' ;;
       "  clone_url: \$REVIEWER_CLONE_URL  #"*)

@@ -81,7 +81,7 @@ func TestGiteaWorkerReconciliationStopsRunMovedToDone(t *testing.T) {
 	cfg.Repo.Name = repo
 	cfg.Repo.DefaultBranch = "main"
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.APIKey = bed.gitea.botToken
+	cfg.Tracker.Provider = map[string]any{"token": bed.gitea.botToken}
 	cfg.Tracker.ActiveStates = []string{"Todo"}
 	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
 	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
@@ -188,7 +188,7 @@ func runGiteaWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fi
 	cfg.Repo.CloneURL = cloneURL
 	cfg.Repo.DefaultBranch = "main"
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.APIKey = bed.gitea.botToken
+	cfg.Tracker.Provider = map[string]any{"token": bed.gitea.botToken}
 	cfg.Tracker.ActiveStates = []string{"Todo"}
 	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
 	serviceWorkflow, err := workflow.Load(writeE2EServiceWorkflow(t, string(fixtureContent(t, fixture)), cloneURL))

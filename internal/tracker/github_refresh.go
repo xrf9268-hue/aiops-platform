@@ -75,7 +75,7 @@ func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []I
 func (c *GitHubClient) fetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef, includeBlockers bool) (map[string]IssueState, error) {
 	states, refs := UnknownIssueStatesByRefs(issueRefs)
 	if strings.TrimSpace(c.Token) == "" {
-		return states, fmt.Errorf("GitHub tracker api_key is required")
+		return states, fmt.Errorf("GitHub tracker token is required")
 	}
 	if len(refs) == 0 {
 		return states, nil

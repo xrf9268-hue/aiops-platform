@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -131,18 +132,18 @@ func TestBuildReportFailsWhenGiteaTrackerAPIKeyMissing(t *testing.T) {
 		Runner:       passingRunner,
 	})
 
-	check := findCheck(t, report, "Gitea API key")
+	check := findCheck(t, report, "Workflow")
 	if check.Status != Fail {
-		t.Fatalf("Gitea API key status = %s; want %s", check.Status, Fail)
+		t.Fatalf("Workflow status = %s; want %s", check.Status, Fail)
 	}
-	if !strings.Contains(check.Fix, "tracker.api_key: $GITEA_TOKEN") {
-		t.Fatalf("Gitea API key fix = %q; want the tracker.api_key: $GITEA_TOKEN remediation", check.Fix)
+	if !strings.Contains(check.Detail, "missing_tracker_secret") || !strings.Contains(check.Detail, "tracker.provider.token") {
+		t.Fatalf("Workflow detail = %q; want stable missing provider secret admission error", check.Detail)
 	}
 }
 
 func TestBuildReportMockModeSkipsGiteaTrackerLiveAuth(t *testing.T) {
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  api_key: gitea-key"),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  provider:\n    token: gitea-key"),
 		Mode:         "mock",
 		Runner:       passingRunner,
 	})
@@ -160,7 +161,7 @@ func TestBuildReportRealModeAuthenticatesGiteaTracker(t *testing.T) {
 	installFakeGitOnly(t)
 	srv, requests := newTrackerStub(t, "token gitea-key", http.StatusOK)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  api_key: gitea-key\n  endpoint: "+srv.URL),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  provider:\n    token: gitea-key\n    base_url: "+srv.URL),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -176,7 +177,7 @@ func TestBuildReportRealModeGiteaTrackerUsesGiteaBaseURLFallback(t *testing.T) {
 	srv, requests := newTrackerStub(t, "token gitea-key", http.StatusOK)
 	t.Setenv("GITEA_BASE_URL", srv.URL)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  api_key: gitea-key"),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  provider:\n    token: gitea-key"),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -191,7 +192,7 @@ func TestBuildReportRealModeFailsGiteaTrackerOnUnauthorized(t *testing.T) {
 	installFakeGitOnly(t)
 	srv, _ := newTrackerStub(t, "token bad-key", http.StatusUnauthorized)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  api_key: bad-key\n  endpoint: "+srv.URL),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  provider:\n    token: bad-key\n    base_url: "+srv.URL),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -212,18 +213,18 @@ func TestBuildReportFailsWhenGitHubTrackerAPIKeyMissing(t *testing.T) {
 		Runner:       passingRunner,
 	})
 
-	check := findCheck(t, report, "GitHub tracker API key")
+	check := findCheck(t, report, "Workflow")
 	if check.Status != Fail {
-		t.Fatalf("GitHub tracker API key status = %s; want %s", check.Status, Fail)
+		t.Fatalf("Workflow status = %s; want %s", check.Status, Fail)
 	}
-	if !strings.Contains(check.Fix, "tracker.api_key: $GITHUB_TOKEN") {
-		t.Fatalf("GitHub tracker API key fix = %q; want the tracker.api_key: $GITHUB_TOKEN remediation", check.Fix)
+	if !strings.Contains(check.Detail, "missing_tracker_secret") || !strings.Contains(check.Detail, "tracker.provider.token") {
+		t.Fatalf("Workflow detail = %q; want stable missing provider secret admission error", check.Detail)
 	}
 }
 
 func TestBuildReportMockModeSkipsGitHubTrackerLiveAuth(t *testing.T) {
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: gh-key"),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: gh-key"),
 		Mode:         "mock",
 		Runner:       passingRunner,
 	})
@@ -241,7 +242,7 @@ func TestBuildReportRealModeAuthenticatesGitHubTracker(t *testing.T) {
 	installFakeGitOnly(t)
 	srv, requests := newTrackerStub(t, "Bearer gh-key", http.StatusOK)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: gh-key\n  endpoint: "+srv.URL),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: gh-key\n    api_url: "+srv.URL),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -263,7 +264,7 @@ func TestBuildReportRealModeGitHubTrackerUsesEnvBaseURLFallback(t *testing.T) {
 	srv, requests := newTrackerStub(t, "Bearer gh-key", http.StatusOK)
 	t.Setenv("GITHUB_API_BASE_URL", srv.URL)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: gh-key"),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: gh-key"),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -278,7 +279,7 @@ func TestBuildReportRealModeFailsGitHubTrackerOnUnauthorized(t *testing.T) {
 	installFakeGitOnly(t)
 	srv, _ := newTrackerStub(t, "Bearer bad-key", http.StatusUnauthorized)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: bad-key\n  endpoint: "+srv.URL),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: bad-key\n    api_url: "+srv.URL),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -295,15 +296,15 @@ func TestBuildReportRealModeFailsGitHubTrackerOnUnauthorized(t *testing.T) {
 func TestCheckGiteaTrackerFailsWithoutRepoOwnerAndName(t *testing.T) {
 	r := &reportBuilder{opts: Options{Mode: "real"}}
 	r.normalize()
-	cfg := workflow.Config{Tracker: workflow.TrackerConfig{Kind: "gitea", APIKey: "gitea-key"}}
+	cfg := workflow.Config{Tracker: workflow.TrackerConfig{Provider: map[string]any{"token": "gitea-key"}, Kind: "gitea"}}
 	r.checkGiteaTracker(context.Background(), cfg)
 
 	check := findCheck(t, Report{Checks: r.checks}, "Gitea auth")
 	if check.Status != Fail {
 		t.Fatalf("checkGiteaTracker(no repo.owner/name) Gitea auth status = %s; want %s", check.Status, Fail)
 	}
-	if !strings.Contains(check.Fix, "repo.owner and repo.name") {
-		t.Fatalf("Gitea auth fix = %q; want the repo.owner/repo.name remediation", check.Fix)
+	if !strings.Contains(check.Fix, "tracker.provider.repo") || !strings.Contains(check.Fix, "repo.owner") {
+		t.Fatalf("Gitea auth fix = %q; want provider or generic repo scope remediation", check.Fix)
 	}
 }
 
@@ -335,8 +336,7 @@ func TestCheckGiteaTrackerMasksEndpointUserinfoInErrors(t *testing.T) {
 	r.normalize()
 	cfg := workflow.Config{}
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.APIKey = "gitea-key"
-	cfg.Tracker.Endpoint = "https://" + secret + "@127.0.0.1:1"
+	cfg.Tracker.Provider = map[string]any{"token": "gitea-key", "base_url": "https://" + secret + "@127.0.0.1:1"}
 	// A hand-built config carries no loader defaults, so name the active
 	// states explicitly; an empty set would short-circuit the listing without
 	// any request reaching the failing transport.
@@ -383,11 +383,11 @@ func TestCheckLinearGraphQLProjectSlugErrorNamesOnlyTrackerProjectSlug(t *testin
 	r := &reportBuilder{opts: Options{Mode: "real"}}
 	r.normalize()
 
-	err := r.checkLinearGraphQL(context.Background(), workflow.Config{})
+	err := r.checkLinearGraphQL(context.Background(), tracker.NewLinearClient(workflow.TrackerConfig{}))
 	if err == nil {
 		t.Fatalf("checkLinearGraphQL(no project_slug) error = nil; want missing-slug error")
 	}
-	if got, want := err.Error(), "linear project_slug is required at tracker.project_slug"; got != want {
+	if got, want := err.Error(), "linear project slug is required at tracker.provider.project_slug"; got != want {
 		t.Fatalf("checkLinearGraphQL(no project_slug) error = %q; want %q", got, want)
 	}
 }
@@ -416,9 +416,8 @@ func TestLinearProbeCarriesPerRequestDeadline(t *testing.T) {
 
 	cfg := workflow.Config{}
 	cfg.Tracker.Kind = "linear"
-	cfg.Tracker.APIKey = "lin-k"
-	cfg.Tracker.ProjectSlug = "platform"
-	if err := r.checkLinearGraphQL(context.Background(), cfg); err != nil {
+	cfg.Tracker.Provider = map[string]any{"api_key": "lin-k", "project_slug": "platform"}
+	if err := r.checkLinearGraphQL(context.Background(), tracker.NewLinearClient(cfg.Tracker)); err != nil {
 		t.Fatalf("checkLinearGraphQL() = %v; want nil from the stub transport", err)
 	}
 
@@ -432,13 +431,13 @@ func TestLinearProbeCarriesPerRequestDeadline(t *testing.T) {
 
 // TestBuildReportRealModeGitHubTrackerNormalizesTrailingSlashEndpoint pins
 // NewGitHubClient's trailing-slash normalization on the doctor path: a
-// trailing-slash tracker.endpoint must still produce clean listing paths, not
+// a trailing-slash provider endpoint must still produce clean listing paths, not
 // "//repos/...", or doctor would query a different URL than the poll loop.
 func TestBuildReportRealModeGitHubTrackerNormalizesTrailingSlashEndpoint(t *testing.T) {
 	installFakeGitOnly(t)
 	srv, requests := newTrackerStub(t, "Bearer gh-key", http.StatusOK)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: gh-key\n  endpoint: "+srv.URL+"/"),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: gh-key\n    api_url: "+srv.URL+"/"),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -457,7 +456,7 @@ func TestBuildReportRealModeGiteaTrackerNormalizesTrailingSlashEndpoint(t *testi
 	installFakeGitOnly(t)
 	srv, requests := newTrackerStub(t, "token gitea-key", http.StatusOK)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  api_key: gitea-key\n  endpoint: "+srv.URL+"/"),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  provider:\n    token: gitea-key\n    base_url: "+srv.URL+"/"),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -478,7 +477,7 @@ func TestBuildReportRealModeGitHubTrackerClosedOnlyStatesSkipPullsListing(t *tes
 	installFakeGitOnly(t)
 	srv, requests := newPullsRejectingStub(t)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: gh-key\n  endpoint: "+srv.URL+"\n  active_states: [\"closed\"]"),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: gh-key\n    api_url: "+srv.URL+"\n  active_states: [\"closed\"]"),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -502,7 +501,7 @@ func TestBuildReportRealModeFailsGitHubTrackerWhenPullsForbidden(t *testing.T) {
 	installFakeGitOnly(t)
 	srv, requests := newPullsRejectingStub(t)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: gh-key\n  endpoint: "+srv.URL),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: gh-key\n    api_url: "+srv.URL),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -533,7 +532,7 @@ func TestBuildReportRealModeFailsGiteaTrackerOnNonJSONBody(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  api_key: gitea-key\n  endpoint: "+srv.URL),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  provider:\n    token: gitea-key\n    base_url: "+srv.URL),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -623,7 +622,7 @@ func TestBuildReportRealModeFailsLinearOnNonJSONBody(t *testing.T) {
 
 // TestGiteaTrackerStatusErrorWithUserinfoEndpointStaysMasked pins that the
 // production client's non-transport error texts (HTTP status, decode) stay
-// credential-free when tracker.endpoint carries basic-auth userinfo: the
+// credential-free when the provider endpoint carries basic-auth userinfo: the
 // client error reaches the FAIL detail through maskedProbeError, and nothing
 // in the status path interpolates the raw URL.
 func TestGiteaTrackerStatusErrorWithUserinfoEndpointStaysMasked(t *testing.T) {
@@ -636,7 +635,7 @@ func TestGiteaTrackerStatusErrorWithUserinfoEndpointStaysMasked(t *testing.T) {
 	t.Cleanup(srv.Close)
 	endpoint := strings.Replace(srv.URL, "http://", "http://bot:"+secret+"@", 1)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  api_key: gitea-key\n  endpoint: "+endpoint),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "gitea", "\n  provider:\n    token: gitea-key\n    base_url: "+endpoint),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})
@@ -655,7 +654,7 @@ func TestGiteaTrackerStatusErrorWithUserinfoEndpointStaysMasked(t *testing.T) {
 
 // TestGitHubTrackerStatusErrorWithUserinfoEndpointStaysMasked is the GitHub
 // twin of the Gitea status-error masking pin: a userinfo-bearing
-// tracker.endpoint plus a non-transport client failure (HTTP 401) must reach
+// a provider endpoint plus a non-transport client failure (HTTP 401) must reach
 // the FAIL detail with the credential masked.
 func TestGitHubTrackerStatusErrorWithUserinfoEndpointStaysMasked(t *testing.T) {
 	installFakeGitOnly(t)
@@ -667,7 +666,7 @@ func TestGitHubTrackerStatusErrorWithUserinfoEndpointStaysMasked(t *testing.T) {
 	t.Cleanup(srv.Close)
 	endpoint := strings.Replace(srv.URL, "http://", "http://bot:"+secret+"@", 1)
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  api_key: gh-key\n  endpoint: "+endpoint),
+		WorkflowPath: writeTrackerPreflightWorkflow(t, "github", "\n  provider:\n    token: gh-key\n    api_url: "+endpoint),
 		Mode:         "real",
 		Runner:       passingRunner,
 	})

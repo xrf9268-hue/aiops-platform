@@ -421,8 +421,8 @@ Both the GitHub adapter (`internal/tracker/github.go`) and the Gitea adapter
 (`internal/gitea/tracker_client.go`) cap label-scoped issue listing at a
 small number of pages so a pathological repository cannot spend the worker
 on a single tracker call. The cap is configurable with
-`tracker.pagination_max_pages`; `0` or an omitted value keeps the adapter
-default. When the cap is reached and the next page is still non-empty (or
+`tracker.provider.pagination_max_pages`; an omitted value keeps the selected
+adapter default. When the cap is reached and the next page is still non-empty (or
 carries a `Link: rel="next"` header), the adapter:
 
 1. increments `PaginationCapHits()` so the metric surfaces in operator
@@ -452,7 +452,7 @@ If you see this diagnostic in a poll tick log:
   similarly bounded), the project genuinely has too many active issues for
   the worker's cap to enumerate in one tick.
 - Either reduce the active set on the tracker (move terminal issues out of
-  active states) or raise `tracker.pagination_max_pages` after estimating the
+  active states) or raise `tracker.provider.pagination_max_pages` after estimating the
   API cost for your repository size.
 
 Gitea previously returned a silently capped slice in this scenario, so

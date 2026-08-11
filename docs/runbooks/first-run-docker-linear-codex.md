@@ -13,7 +13,7 @@ aiops-platform with Docker, Linear, and `codex app-server`.
 | Codex auth | ChatGPT/Codex login in a restricted writable `CODEX_HOME` (`/home/aiops/.codex`) so token refresh persists, **or** model API key via `OPENAI_API_KEY` added to `codex.env_passthrough` and sourced from a Docker secret; verify with `worker --doctor --mode=real`. See [`codex-app-server-docker.md`](codex-app-server-docker.md) for the full auth/model lifecycle (setup, rotation, revocation). | Local host development can use the normal host `~/.codex`. | Passing raw bearer/API tokens on command lines or in logs is not supported; tracker/repo tokens are never passed through to the agent. |
 | Codex model config | Declarative, version-controlled `config.toml` (model/provider/reasoning) mounted read-only over `$CODEX_HOME/config.toml`; doctor reports the resolved selection. | `WORKFLOW.md` `codex.*` front matter for sandbox/approval/timeouts. | Copying an opaque host `config.toml` into the image or writable home is discouraged — model selection must be auditable. |
 | GitHub agent auth | File-backed `gh` auth from a Docker secret, or a dedicated SSH deploy key, visible to the `aiops` user and verified with `worker --doctor --mode=real --github-issue <n>`. | Read-only issue-only tokens are enough for analysis-only smoke tests; branch push validation needs write-capable repo credentials. | `GH_TOKEN`/`GITHUB_TOKEN` in the worker environment are stripped from agent subprocesses and are not a valid dogfood credential contract. |
-| Linear auth | Personal API key in a Docker Compose secret file. Linear expects `Authorization: <API_KEY>` for personal keys. | Local development may use `LINEAR_API_KEY` in `.env`; do not use this for production-style examples. | OAuth app-actor is documented by Linear and is the intended future service-account path, but aiops-platform still accepts a single `tracker.api_key` string today. |
+| Linear auth | Personal API key in a Docker Compose secret file. Linear expects `Authorization: <API_KEY>` for personal keys. | Local development may use `LINEAR_API_KEY` in `.env`; do not use this for production-style examples. | OAuth app-actor is documented by Linear and is the intended future service-account path; this adapter reads `tracker.provider.api_key`. |
 | Sandbox | Mock mode works under the base hardened container. Real Codex Docker validation uses a Docker-isolated profile and explicit `codex.thread_sandbox: danger-full-access` only inside that container boundary. | Enable kernel/user namespace support and keep Codex `workspace-write` if your container profile permits it. | Do not copy `danger-full-access` to a shared host run. |
 
 Official references checked for this path:
@@ -65,7 +65,7 @@ secret file (`.aiops/secrets/openai_api_key`), and add `OPENAI_API_KEY` to
 Edit `.aiops/WORKFLOW.md`:
 
 - set `repo.clone_url` to a disposable fixture repository for smoke tests;
-- set `tracker.project_slug` to the Linear project slug;
+- set `tracker.provider.project_slug` to the Linear project slug;
 - keep `agent.default: mock` for the first smoke;
 - switch to `agent.default: codex-app-server` only for the real Codex smoke;
 - in Docker real mode, use a real-Codex workflow template whose `codex.command`
@@ -368,7 +368,7 @@ driven; do not copy disposable issue text into `WORKFLOW.md`.
 | Symptom | Next action |
 | --- | --- |
 | `FAIL Linear API key` | Make sure the workflow uses `api_key: $LINEAR_API_KEY`; for Docker, set `LINEAR_API_KEY_FILE` and merge `deploy/docker-compose.codex.yml`. |
-| `FAIL Linear auth` | Personal keys must be sent raw, not as `Bearer`; confirm the token can see `tracker.project_slug`. |
+| `FAIL Linear auth` | Personal keys must be sent raw, not as `Bearer`; confirm the token can see `tracker.provider.project_slug`. |
 | `FAIL Codex CLI` | Build the `codex-worker` target or install Codex on the host. |
 | `FAIL Codex auth` | Run `codex --login` for the same `CODEX_HOME` and container user context. |
 | `FAIL Codex auth mode` | `OPENAI_API_KEY` is in `codex.env_passthrough` but empty; mount it from a Docker secret. |

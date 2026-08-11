@@ -222,7 +222,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			want: []string{
 				"  owner: aiops-bot",
 				"  name: crowd-runner-product",
-				"  endpoint: https://gitea.example.test",
+				"    base_url: https://gitea.example.test",
 				"  root: " + filepath.Join(runRoot, "workspaces", "maker"),
 				"    - npm ci",
 				"    - npm run lint",
@@ -236,7 +236,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			want: []string{
 				"  owner: aiops-bot",
 				"  name: crowd-runner-product",
-				"  endpoint: https://gitea.example.test",
+				"    base_url: https://gitea.example.test",
 				"  root: " + filepath.Join(runRoot, "workspaces", "reviewer"),
 				"npm ci, npm run lint, npm run test -- --run, and npm run build",
 			},
